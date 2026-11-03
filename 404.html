@@ -8,16 +8,30 @@
   <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap">
-  <link rel="stylesheet" href="/assets/css/site.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@700&family=JetBrains+Mono:wght@400&display=swap">
   <script>try { var t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <style>
+    :root { --frame: #e7e4df; --paper: #faf8f5; --ink: #141413; --muted: rgba(20,20,19,.56); --accent: #ff5522; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --frame: #000; --paper: #141413; --ink: #faf8f5; --muted: rgba(250,248,245,.56); } }
+    :root[data-theme="dark"] { --frame: #000; --paper: #141413; --ink: #faf8f5; --muted: rgba(250,248,245,.56); }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; min-height: 100dvh; padding: 8px; background: var(--frame); color: var(--ink); display: grid; }
+    main { background: var(--paper); border-radius: 6px; display: grid; grid-template-rows: auto 1fr auto; padding: clamp(20px, 2.4vw, 36px); text-align: center; }
+    .mono { font: 11px/1.4 "JetBrains Mono", ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { align-self: center; margin: 0; font: 700 clamp(64px, 12vw, 160px)/1 "Inter Tight", Helvetica, Arial, sans-serif; letter-spacing: -0.05em; }
+    p { margin: 16px 0 0; color: var(--muted); }
+    a { color: inherit; display: inline-flex; gap: 10px; align-items: center; justify-content: center; }
+    a i { width: 11px; height: 11px; background: var(--accent); }
+  </style>
 </head>
 <body>
-  <main class="wrap intro">
-    <p class="eyebrow mono">Error 404 · Test case failed</p>
-    <h1 class="display">Expected a page here. Got nothing.
-      <span class="muted">Logged, tracked, and routed back to safety.</span></h1>
-    <p style="margin-top:48px"><a class="text-link mono" href="/">Return home ↗</a></p>
+  <main>
+    <span class="mono">Kathmandu, Nepal</span>
+    <div style="align-self:center">
+      <h1>4 : 04</h1>
+      <p class="mono">Test case failed · Expected a page, got nothing</p>
+    </div>
+    <a class="mono" href="/"><i></i>Back to work</a>
   </main>
 </body>
 </html>
