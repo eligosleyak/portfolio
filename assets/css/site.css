@@ -181,6 +181,22 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
 .topbar a { opacity: .62; transition: opacity .2s; }
 .topbar a:hover, .topbar a.is-active { opacity: 1; }
 .topbar .email { opacity: 1; white-space: nowrap; }
+.topbar-end { display: flex; align-items: center; gap: 18px; }
+.mini-timer {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px 4px 7px; opacity: 1;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent); border-radius: 999px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; transition: opacity .3s, border-color .2s;
+  animation: mini-in .5s var(--ease);
+}
+.mini-timer[hidden] { display: none; }
+.mini-timer:hover { border-color: currentColor; }
+.mini-timer.paused { opacity: .6; }
+.mini-timer svg { width: 13px; height: 13px; transform: rotate(-90deg); flex: none; }
+.mini-timer circle { fill: none; stroke-width: 1.6; }
+.mini-timer .t { stroke: currentColor; opacity: .28; }
+.mini-timer .p { stroke: #b98cff; stroke-linecap: round; transition: stroke-dashoffset .25s linear; }
+.right.has-sheet .mini-timer .p { stroke: var(--amethyst); }
+@keyframes mini-in { from { opacity: 0; transform: translateY(-4px); } }
 .topbar .email .short { display: none; }
 .bottombar { bottom: 0; opacity: .7; pointer-events: none; }
 .bottombar h1 { font: inherit; letter-spacing: inherit; }
@@ -367,6 +383,8 @@ html:not(.js) .case { display: block; margin-bottom: 96px; }
 @media (max-width: 560px) {
   .topbar .email .long { display: none; }
   .topbar .email .short { display: inline; }
+  .topbar-end:has(.mini-timer:not([hidden])) .email { display: none; }
+  .mini-timer #miniName { display: none; }
   .phases { gap: 12px; }
   .phases .lg { display: none; }
   .phases .sm { display: inline; }

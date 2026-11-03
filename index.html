@@ -93,7 +93,13 @@
         <a href="#playground" data-nav="playground">Playground</a>
         <a href="#pomodoro" data-nav="timer">Pomodoro</a>
       </nav>
-      <a class="email" href="mailto:shashankchr@protonmail.ch"><span class="long">shashankchr@protonmail.ch</span><span class="short">Email</span> <span aria-hidden="true">↗</span></a>
+      <div class="topbar-end">
+  <a class="email" href="mailto:shashankchr@protonmail.ch"><span class="long">shashankchr@protonmail.ch</span><span class="short">Email</span> <span aria-hidden="true">↗</span></a>
+        <a class="mini-timer" id="miniTimer" href="#pomodoro" hidden>
+          <svg viewBox="0 0 14 14" aria-hidden="true"><circle class="t" cx="7" cy="7" r="5.5"/><circle class="p" id="miniArc" cx="7" cy="7" r="5.5"/></svg>
+          <span id="miniName">Focus</span> <span id="miniTime">25:00</span>
+        </a>
+      </div>
     </header>
 
     <div class="picker" id="picker">
