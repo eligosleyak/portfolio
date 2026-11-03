@@ -187,6 +187,10 @@
     const ROUNDS = 4;
     const live = $('#live');
     const goBtn = $('#timerGo'), phaseBtns = $$('[data-phase]'), dots = $$('#rounds i');
+    const mini = $('#miniTimer'), miniTime = $('#miniTime'), miniName = $('#miniName'), miniArc = $('#miniArc');
+    const ARC = 2 * Math.PI * 5.5;
+    const baseTitle = document.title;
+    miniArc.style.strokeDasharray = `${ARC} ${ARC}`;
 
     let st = { phase: 'focus', round: 1, running: false, endAt: 0, remMs: DUR.focus };
     try {
@@ -205,6 +209,7 @@
       const done = st.phase === 'focus' ? st.round - 1 : st.round;   // focus sessions finished this cycle
       dots.forEach((d, i) => d.classList.toggle('on', i < done));
       $('#rounds').setAttribute('aria-label', `Round ${st.round} of ${ROUNDS}`);
+      paintMini();
     }
 
     function setPhase(p, { round } = {}) {
@@ -251,6 +256,23 @@
     // A session that ended while the page was closed.
     if (st.running && Date.now() >= st.endAt) { st.running = false; st.remMs = DUR[st.phase]; advance(false); }
 
+    // Small timer in the top-right corner while a session is on and you're elsewhere on the site.
+    function paintMini() {
+      const r = remaining(), tot = Math.ceil(r / 1000);
+      const txt = `${String(Math.floor(tot / 60)).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`;
+      const inView = root.classList.contains('timer');
+      const active = st.running || (r > 0 && r < DUR[st.phase]);
+      mini.hidden = !active || inView;
+      mini.classList.toggle('paused', !st.running);
+      miniTime.textContent = txt;
+      miniName.textContent = NAME[st.phase];
+      miniArc.style.strokeDashoffset = (ARC * (r / DUR[st.phase])).toFixed(2);
+      mini.setAttribute('aria-label', `${NAME[st.phase]} ${st.running ? '' : 'paused, '}${txt} left. Open the Pomodoro.`);
+      const title = st.running || inView ? `${txt} · ${NAME[st.phase]} — Shashank Acharya` : baseTitle;
+      if (document.title !== title) document.title = title;
+    }
+    setInterval(paintMini, 250);
+
     goBtn.addEventListener('click', () => (st.running ? pause() : start()));
     $('#timerReset').addEventListener('click', () => setPhase(st.phase));
     $('#timerSkip').addEventListener('click', () => advance(true));
@@ -258,6 +280,7 @@
     ui();
 
     return {
+      paint: () => paintMini(),
       remaining, finish,
       running: () => st.running,
       total: () => DUR[st.phase],
@@ -282,8 +305,6 @@
     const fmt = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Kathmandu', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
     });
-    const baseTitle = document.title;
-
     // Where the clock reads its time from.
     const wallClock = {
       read() {
@@ -560,8 +581,6 @@
       }
       const timing = source === countdown;
       clockEl.classList.toggle('paused', timing && !timer.running());
-      const title = timing ? `${p.a}:${p.b} · ${timer.name()} — Shashank Acharya` : baseTitle;
-      if (document.title !== title) document.title = title;
       tickTimer = setTimeout(tick, source.nextTick());
     }
 
@@ -967,6 +986,7 @@
     if (timing !== root.classList.contains('timer')) {
       root.classList.toggle('timer', timing);
       clock.setMode(timing ? 'timer' : 'clock');
+      timer.paint();
       clearTimeout(timerBgTimer);
       if (timing) { timerBgTimer = setTimeout(() => bg.pause(true), 900); window.scrollTo(0, 0); }
       else if (!sheet) bg.pause(false);
