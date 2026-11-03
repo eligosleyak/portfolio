@@ -48,7 +48,18 @@
 
   <!-- ============ LEFT: live clock ============ -->
   <section class="panel left" aria-label="Local time in Kathmandu">
-    <p class="place mono">Kathmandu, Nepal</p>
+    <div class="left-top">
+      <p class="place mono">Kathmandu, Nepal</p>
+      <div class="pomo-top mono">
+        <a class="pomo-back" href="#work">← Work</a>
+        <div class="phases" role="tablist" aria-label="Pomodoro phase">
+          <button type="button" role="tab" data-phase="focus">Focus</button>
+          <button type="button" role="tab" data-phase="short"><span class="lg">Short break</span><span class="sm">Short</span></button>
+          <button type="button" role="tab" data-phase="long"><span class="lg">Long break</span><span class="sm">Long</span></button>
+        </div>
+        <span class="rounds" id="rounds" role="img"><i></i><i></i><i></i><i></i></span>
+      </div>
+    </div>
 
     <div class="stage" id="stage">
       <svg class="wires" id="wires" aria-hidden="true"></svg>
@@ -61,6 +72,11 @@
 
     <div class="controls mono">
       <button type="button" id="invert">Invert color</button>
+      <div class="pomo-ctl" role="group" aria-label="Pomodoro controls">
+        <button type="button" id="timerReset">Reset</button>
+        <button type="button" id="timerGo" class="pill" aria-pressed="false">Start</button>
+        <button type="button" id="timerSkip">Skip</button>
+      </div>
       <button type="button" id="sound" class="pill" aria-pressed="false">Sound: <span id="soundState">—</span></button>
     </div>
   </section>
@@ -75,6 +91,7 @@
         <a href="#work" data-nav="work">Work</a>
         <a href="#about" data-nav="about">About</a>
         <a href="#playground" data-nav="playground">Playground</a>
+        <a href="#pomodoro" data-nav="timer">Pomodoro</a>
       </nav>
       <a class="email" href="mailto:shashankchr@protonmail.ch"><span class="long">shashankchr@protonmail.ch</span><span class="short">Email</span> <span aria-hidden="true">↗</span></a>
     </header>

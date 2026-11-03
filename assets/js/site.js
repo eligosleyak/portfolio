@@ -23,7 +23,7 @@
     const btn = $('#sound'), state = $('#soundState');
     const ROOT = 216;
     const PENTA = [216, 243, 273, 324, 364];
-    let ctx = null, master = null, bus = null, noiseBuf = null, on = false, offTimer = 0;
+    let ctx = null, master = null, bus = null, noiseBuf = null, on = false, offTimer = 0, mutedOnPurpose = false;
 
     function init() {
       if (ctx) return true;
@@ -124,6 +124,7 @@
     function setOn(v) {
       if (v && !init()) return;
       on = v;
+      mutedOnPurpose = !v;
       btn.setAttribute('aria-pressed', String(on));
       state.textContent = on ? 'On' : '—';
       if (!ctx) return;
@@ -146,6 +147,15 @@
       spin(seconds) { ambient(() => sing(ROOT, 0.05, Math.max(0.5, seconds), 3.5)); },
       minute() { ambient(() => { strike(ROOT, 0.2, 9); strike(ROOT / 2, 0.09, 10); }); },
       click() { ambient(() => strike(432, 0.05, 3)); },
+      // Starting the timer is a gesture, so the audio can be readied for the end-of-session bell.
+      prime() { if (init()) { wake(); clearTimeout(offTimer); } },
+      // End of a timer session: three strikes of the bowl, unless sound was switched off on purpose.
+      session() {
+        if (mutedOnPurpose || !init()) return;
+        wake();
+        strike(ROOT, 0.2, 9); strike(ROOT, 0.17, 9, 2.6); strike(ROOT / 2, 0.12, 10, 5.2); strike(ROOT, 0.15, 9, 5.2);
+        if (!on) { clearTimeout(offTimer); offTimer = setTimeout(() => { if (!on) ctx.suspend(); }, 16000); }
+      },
       // The bowl in the middle answers a deliberate press even when ambient sound is off.
       bowl() {
         if (!init()) return;
@@ -166,20 +176,142 @@
     sound.click();
   });
 
+  /* ================= Timer (pomodoro) state =================
+     25 min focus, 5 min short break, 15 min long break after every 4th focus.
+     State lives in localStorage so a refresh keeps the countdown going. */
+  let clock = null;                                         // set below, once the clock exists
+  const timer = (() => {
+    const MIN = 60000;
+    const DUR = { focus: 25 * MIN, short: 5 * MIN, long: 15 * MIN };
+    const NAME = { focus: 'Focus', short: 'Short break', long: 'Long break' };
+    const ROUNDS = 4;
+    const live = $('#live');
+    const goBtn = $('#timerGo'), phaseBtns = $$('[data-phase]'), dots = $$('#rounds i');
+
+    let st = { phase: 'focus', round: 1, running: false, endAt: 0, remMs: DUR.focus };
+    try {
+      const saved = JSON.parse(store.get('timer') || 'null');
+      if (saved && DUR[saved.phase]) st = Object.assign(st, saved);
+    } catch (e) {}
+    const save = () => store.set('timer', JSON.stringify(st));
+
+    const remaining = () => (st.running ? Math.max(0, st.endAt - Date.now()) : st.remMs);
+    let advanceTimer = 0;
+
+    function ui() {
+      goBtn.textContent = st.running ? 'Pause' : remaining() < DUR[st.phase] && remaining() > 0 ? 'Resume' : 'Start';
+      goBtn.setAttribute('aria-pressed', String(st.running));
+      phaseBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.phase === st.phase)));
+      const done = st.phase === 'focus' ? st.round - 1 : st.round;   // focus sessions finished this cycle
+      dots.forEach((d, i) => d.classList.toggle('on', i < done));
+      $('#rounds').setAttribute('aria-label', `Round ${st.round} of ${ROUNDS}`);
+    }
+
+    function setPhase(p, { round } = {}) {
+      clearTimeout(advanceTimer);
+      st.phase = p;
+      if (round) st.round = round;
+      st.running = false;
+      st.remMs = DUR[p];
+      save(); ui();
+      if (clock) clock.restart();
+    }
+
+    function advance(announce) {
+      let next;
+      if (st.phase === 'focus') next = st.round % ROUNDS === 0 ? 'long' : 'short';
+      else { st.round = st.phase === 'long' ? 1 : st.round + 1; next = 'focus'; }
+      setPhase(next);
+      if (announce) live.textContent = `${NAME[next]} next. Press start when you’re ready.`;
+    }
+
+    function start() {
+      if (st.running || remaining() <= 0) return;
+      st.running = true;
+      st.endAt = Date.now() + st.remMs;
+      sound.prime();
+      save(); ui();
+    }
+    function pause() {
+      if (!st.running) return;
+      st.remMs = remaining();
+      st.running = false;
+      save(); ui();
+    }
+
+    // Called by the clock when the countdown reaches 00:00.
+    function finish() {
+      st.running = false; st.remMs = 0; save(); ui();
+      live.textContent = `${NAME[st.phase]} complete.`;
+      sound.session();
+      clearTimeout(advanceTimer);
+      advanceTimer = setTimeout(() => advance(true), 5200);
+    }
+
+    // A session that ended while the page was closed.
+    if (st.running && Date.now() >= st.endAt) { st.running = false; st.remMs = DUR[st.phase]; advance(false); }
+
+    goBtn.addEventListener('click', () => (st.running ? pause() : start()));
+    $('#timerReset').addEventListener('click', () => setPhase(st.phase));
+    $('#timerSkip').addEventListener('click', () => advance(true));
+    phaseBtns.forEach((b) => b.addEventListener('click', () => setPhase(b.dataset.phase)));
+    ui();
+
+    return {
+      remaining, finish,
+      running: () => st.running,
+      total: () => DUR[st.phase],
+      name: () => NAME[st.phase],
+      toggle: () => (st.running ? pause() : start()),
+    };
+  })();
+
   /* ================= Kinetic clock: strings of time =================
-     Each second of the current minute owns a point on a circular dial.
-     When the second arrives, a string shoots out from the clock to that
-     point and stays; its waves keep travelling outward from the middle.
-     Finale: from :56 the whole dial makes one full turn, ripples close in
-     on the clock, and at :00 a ripple of light runs through the digits as
-     the minute changes. Then the strings are pulled in and it starts over. */
-  (() => {
+     The dial has 60 points. In clock mode they are the seconds of the
+     current minute in Kathmandu; in timer mode they are the countdown's
+     seconds. As each one arrives, a string shoots out from the digits to
+     its point and stays; its waves keep travelling outward.
+     Finale of every minute: from :56 the whole dial makes one full turn,
+     amethyst rings close in, and at :00 a ripple of light runs through
+     the digits. Then the strings are pulled in and it starts over. */
+  clock = (() => {
     const stage = $('#stage'), svg = $('#wires');
     const hh = $('#hh'), mm = $('#mm'), colon = $('#colon'), clockEl = $('#clock'), glow = $('#clockGlow'), bowl = $('#bowl');
     const NS = 'http://www.w3.org/2000/svg';
+    const pad = (n) => String(n).padStart(2, '0');
     const fmt = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Kathmandu', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
     });
+    const baseTitle = document.title;
+
+    // Where the clock reads its time from.
+    const wallClock = {
+      read() {
+        const p = {};
+        fmt.formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
+        return { a: p.hour, b: p.minute, slot: +p.second, key: p.hour + p.minute, aria: `Local time in Kathmandu ${p.hour}:${p.minute}` };
+      },
+      msm: () => Date.now() % 60000,                    // NPT is a whole-minute offset from UTC
+      label: (k) => pad(k),
+      nextTick: () => 1000 - (Date.now() % 1000) + 5,
+      onRoll: () => sound.minute(),
+    };
+    const countdown = {
+      read() {
+        const r = timer.remaining();
+        const tot = Math.ceil(r / 1000), m = Math.floor(tot / 60), s = tot % 60;
+        return {
+          a: pad(m), b: pad(s), slot: (60 - s) % 60, key: String(Math.ceil(r / 60000)),
+          aria: `${timer.name()}: ${m} minutes ${s} seconds left`,
+        };
+      },
+      msm() { const r = timer.remaining(), k = Math.ceil(r / 60000); return 60000 - (r - (k - 1) * 60000); },
+      label: (k) => pad((60 - k) % 60),
+      nextTick: () => (timer.running() ? (timer.remaining() % 1000) + 5 : 200),
+      onRoll: (key) => { if (key === '0') timer.finish(); else sound.ripple(0); },
+    };
+    let source = wallClock;
+
     const mk = (tag, attrs, parent) => {
       const e = document.createElementNS(NS, tag);
       Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
@@ -187,39 +319,44 @@
       return e;
     };
     const gRing = mk('g', { class: 'ring' }, svg);
+    const gArc = mk('g', { class: 'progress' }, svg);
+    const track = mk('circle', { class: 'track' }, gArc);
+    const arc = mk('circle', { class: 'arc' }, gArc);
     const gStrings = mk('g', { class: 'strings' }, svg);
     const gRipples = mk('g', { class: 'ripples' }, svg);
     const converge = [0, 1, 2].map(() => mk('circle', { class: 'converge' }, gRipples));
-    const labels = Array.from({ length: 60 }, (_, s) => {
-      const t = mk('text', {}, gRing);
-      t.textContent = String(s).padStart(2, '0');
-      return t;
-    });
+    const labels = Array.from({ length: 60 }, () => mk('text', {}, gRing));
+    const relabel = () => labels.forEach((t, k) => { t.textContent = source.label(k); });
+    relabel();
 
-    const SAMPLES = 40, GROW_MS = 700, RETRACT_MS = 700;
+    const SAMPLES = 40, GROW_MS = 700, RETRACT_MS = 700, GLOW_MS = 1700;
     const SPIN_FROM = 56000, CONVERGE_FROM = 58200;   // ms into the minute
     const TAU = Math.PI * 2;
     const angle = (s) => -Math.PI / 2 + s * (Math.PI / 30);
     const rand = (a, b) => a + Math.random() * (b - a);
     const ease = (t) => 1 - Math.pow(1 - t, 3);
     const inOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const smoothstep = (x) => x * x * (3 - 2 * x);
     const still = () => reduceMotion.matches;
 
     let geo = null, strings = [], ripples = [], current = -1, minuteKey = null, raf = 0, onScreen = true;
-    let rot = 0, placedRot = null, glowAt = -1;
-    const GLOW_MS = 1700;
-    const smoothstep = (x) => x * x * (3 - 2 * x);
+    let rot = 0, placedRot = null, glowAt = -1, tickTimer = 0;
 
     const live = (s) => strings.some((st) => st.s === s && st.retractAt === null);
 
     function measure() {
       const s = stage.getBoundingClientRect(), k = clockEl.getBoundingClientRect();
+      if (!s.width || !k.width) return;
       const cx = k.left - s.left + k.width / 2, cy = k.top - s.top + k.height / 2;
       const R = Math.max(70, Math.min(s.width, s.height) / 2 - 26);
       const rIn = Math.min(R - 30, k.width / 2 + 16);          // the clear circle around the digits
       geo = { cx, cy, R, rIn, sparse: (TAU * R) / 60 < 22 };
       svg.setAttribute('viewBox', `0 0 ${s.width} ${s.height}`);
       Object.assign(bowl.style, { left: `${cx - rIn}px`, top: `${cy - rIn}px`, width: `${rIn * 2}px`, height: `${rIn * 2}px` });
+      const ar = rIn - 7;
+      [track, arc].forEach((c) => { c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', ar); });
+      arc.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
+      geo.arcLen = TAU * ar;
       placedRot = null;
       placeLabels();
       paintLabels();
@@ -281,13 +418,17 @@
       glowAt = performance.now();
     }
 
-    function startOver(now) {
+    function pullIn(now) {
       strings
         .filter((st) => st.retractAt === null)
         .sort((a, b) => a.s - b.s)
         .forEach((st, i) => { st.retractAt = now + i * 9; });
-      for (let k = 0; k < 3; k++) addRipple(geo.cx, geo.cy, now + k * 200, 1500, geo.rIn, geo.R + 30, true);
-      sound.minute();
+    }
+
+    function startOver(now, key) {
+      pullIn(now);
+      if (geo) for (let k = 0; k < 3; k++) addRipple(geo.cx, geo.cy, now + k * 200, 1500, geo.rIn, geo.R + 30, true);
+      source.onRoll(key);
     }
 
     function frame(now) {
@@ -295,7 +436,7 @@
       if (!geo) return;
       const t = still() ? 0 : now / 1000;
       const { cx, cy, R, rIn } = geo;
-      const msm = Date.now() % 60000;                         // ms into the minute (NPT is a whole-minute offset)
+      const msm = source.msm();
 
       // One full turn of the dial, easing in and out, landing exactly on :00.
       const sp = still() ? 0 : clamp((msm - SPIN_FROM) / (60000 - SPIN_FROM), 0, 1);
@@ -338,6 +479,12 @@
         return true;
       });
 
+      // Session progress, timer mode only: an amethyst arc round the digits.
+      if (source === countdown) {
+        const done = 1 - timer.remaining() / timer.total();
+        arc.style.strokeDasharray = `${(geo.arcLen * done).toFixed(1)} ${geo.arcLen.toFixed(1)}`;
+      }
+
       // Rings close in from the dial and meet the digits at :00.
       const cv = still() ? 0 : clamp((msm - CONVERGE_FROM) / (60000 - CONVERGE_FROM), 0, 1);
       converge.forEach((el, i) => {
@@ -354,7 +501,7 @@
         const gp = (now - glowAt) / GLOW_MS;
         if (gp >= 1 || still()) { glow.style.opacity = '0'; glowAt = -1; }
         else {
-          // The ring band sits at 29–45% of the mask size, so ~560px carries it just past the digits.
+          // The ring band sits at 29–45% of the mask size, so this carries it just past the digits.
           const span = Math.max(260, (clockEl.offsetWidth / 2) / 0.28);
           const a = smoothstep(gp) * span, b = smoothstep(clamp((gp - 0.18) / 0.82, 0, 1)) * span;
           const size = `${a.toFixed(0)}px ${a.toFixed(0)}px, ${b.toFixed(0)}px ${b.toFixed(0)}px`;
@@ -380,15 +527,15 @@
     const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
 
     function tick() {
+      clearTimeout(tickTimer);
       const now = performance.now();
-      const p = {};
-      fmt.formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
-      const sec = +p.second, key = p.hour + p.minute;
-      if (sec !== current) {
+      const p = source.read();
+      const sec = p.slot, key = p.key;
+      if (sec !== current || key !== minuteKey) {
         const first = current === -1;
         const rolled = !first && key !== minuteKey;
-        if (rolled) startOver(now);
-        // Every second of this minute so far gets a string; catches up after a sleeping tab too.
+        if (rolled) startOver(now, key);
+        // Every point of this minute so far gets a string; catches up after a sleeping tab too.
         for (let s = 0; s <= sec; s++) {
           if (live(s)) continue;
           const delay = first ? s * 22 : rolled ? 380 + s * 12 : 0;
@@ -397,21 +544,33 @@
         current = sec; minuteKey = key;
         if (!first && !still()) pluck(sec, now + (rolled ? 380 : 0) + GROW_MS * 0.75);
         if (!first && !rolled) sound.ripple((GROW_MS * 0.75) / 1000);
-        if (!first && sec === 56) sound.spin((60000 - (Date.now() % 60000)) / 1000);
+        if (!first && sec === 56) sound.spin((60000 - source.msm()) / 1000);
         if (rolled && !still()) {
-          if (mm.textContent !== p.minute) { mm.classList.remove('roll'); void mm.offsetWidth; mm.classList.add('roll'); }
-          if (hh.textContent !== p.hour) { hh.classList.remove('roll'); void hh.offsetWidth; hh.classList.add('roll'); }
-          highlight(p.hour, p.minute);
+          if (mm.textContent !== p.b) { mm.classList.remove('roll'); void mm.offsetWidth; mm.classList.add('roll'); }
+          if (hh.textContent !== p.a) { hh.classList.remove('roll'); void hh.offsetWidth; hh.classList.add('roll'); }
+          highlight(p.a, p.b);
         }
-        hh.textContent = p.hour;
-        mm.textContent = p.minute;
-        clockEl.setAttribute('aria-label', `Local time in Kathmandu ${p.hour}:${p.minute}`);
+        hh.textContent = p.a;
+        mm.textContent = p.b;
+        clockEl.setAttribute('aria-label', p.aria);
         colon.classList.remove('dim');
         setTimeout(() => colon.classList.add('dim'), 500);
         paintLabels();
         kick();
       }
-      setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
+      const timing = source === countdown;
+      clockEl.classList.toggle('paused', timing && !timer.running());
+      const title = timing ? `${p.a}:${p.b} · ${timer.name()} — Shashank Acharya` : baseTitle;
+      if (document.title !== title) document.title = title;
+      tickTimer = setTimeout(tick, source.nextTick());
+    }
+
+    // Start the dial over for a new time source or a new session.
+    function restart() {
+      pullIn(performance.now());
+      current = -1; minuteKey = null;
+      relabel();
+      tick();
     }
 
     // Pressing the middle rings the bowl and releases a ripple from the centre.
@@ -431,14 +590,26 @@
 
     const remeasure = () => { measure(); kick(); };
     window.addEventListener('resize', remeasure);
+    if ('ResizeObserver' in window) new ResizeObserver(remeasure).observe(stage);   // follows the panel as it widens
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(remeasure);
-    document.addEventListener('visibilitychange', kick);
+    document.addEventListener('visibilitychange', () => { tick(); kick(); });
     reduceMotion.addEventListener?.('change', kick);
     if ('IntersectionObserver' in window) {
       new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) kick(); }).observe(stage);
     }
     measure();
     tick();
+
+    return {
+      restart,
+      setMode(mode) {
+        const next = mode === 'timer' ? countdown : wallClock;
+        if (next === source) return;
+        source = next;
+        stage.classList.toggle('timing', next === countdown);
+        restart();
+      },
+    };
   })();
 
   /* ================= Procedural backgrounds (WebGL) ================= */
@@ -725,6 +896,11 @@
     document.addEventListener('keydown', (e) => {
       if (e.target instanceof Element && e.target.closest('input, textarea')) return;
       if (e.key === 'Escape' && right.classList.contains('has-sheet')) { location.hash = '#work'; return; }
+      if (root.classList.contains('timer')) {
+        if (e.key === 'Escape') location.hash = '#work';
+        else if (e.key === ' ' && !(e.target instanceof Element && e.target.closest('button, a'))) { e.preventDefault(); timer.toggle(); }
+        return;
+      }
       if (right.classList.contains('has-sheet') || e.metaKey || e.ctrlKey || e.altKey) return;
       if (['ArrowDown', 'ArrowRight', 'j', 'PageDown'].includes(e.key)) { e.preventDefault(); go(target + 1); }
       else if (['ArrowUp', 'ArrowLeft', 'k', 'PageUp'].includes(e.key)) { e.preventDefault(); go(target - 1); }
@@ -744,7 +920,7 @@
   const sheets = { work: $('#sheet-work'), about: $('#sheet-about'), playground: $('#sheet-playground') };
   const navLinks = $$('[data-nav]');
   const prevLink = $('#casePrev'), nextLink = $('#caseNext');
-  let openSheet = null, pauseTimer = 0, lastRoute = '';
+  let openSheet = null, pauseTimer = 0, lastRoute = '', timerBgTimer = 0;
 
   function openCase(id) { location.hash = `#work/${id}`; }
 
@@ -778,6 +954,8 @@
         nextLink.href = `#work/${n.id}`; nextLink.textContent = `${n.title} →`;
         picker.go(i, !openSheet);
       }
+    } else if (h === 'timer' || h === 'pomodoro') {
+      view = 'timer';
     } else if (h === 'about' || h === 'playground') {
       view = sheet = h;
     } else if (h === 'contact') {
@@ -785,6 +963,14 @@
     }
 
     navLinks.forEach((a) => a.classList.toggle('is-active', a.dataset.nav === view));
+    const timing = view === 'timer';
+    if (timing !== root.classList.contains('timer')) {
+      root.classList.toggle('timer', timing);
+      clock.setMode(timing ? 'timer' : 'clock');
+      clearTimeout(timerBgTimer);
+      if (timing) { timerBgTimer = setTimeout(() => bg.pause(true), 900); window.scrollTo(0, 0); }
+      else if (!sheet) bg.pause(false);
+    }
     const before = location.hash;
     const wasOpen = showSheet(sheet);
     if (sheet && (sheet !== wasOpen || before !== lastRoute)) {

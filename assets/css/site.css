@@ -78,7 +78,12 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
   display: grid; grid-template-columns: 42fr 58fr; gap: var(--gap);
   height: 100vh; height: 100dvh; padding: var(--gap);
 }
-.panel { position: relative; overflow: hidden; border-radius: 6px; min-height: 0; }
+.panel { position: relative; overflow: hidden; border-radius: 6px; min-height: 0; min-width: 0; }
+/* Pomodoro: the clock panel widens across the page and the showcase slides away. */
+.app { transition: grid-template-columns .9s var(--ease), gap .9s var(--ease); }
+.timer .app { grid-template-columns: 100fr 0fr; gap: 0px; }
+.right { transition: opacity .5s var(--ease); }
+.timer .right { opacity: 0; pointer-events: none; }
 
 /* ---------- Left panel: clock ---------- */
 .left {
@@ -88,6 +93,32 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
   transition: background-color .5s var(--ease), color .5s var(--ease);
 }
 .place { text-align: center; padding-top: 4px; }
+.pomo-top, .pomo-ctl { display: none; }
+.timer .place { display: none; }
+.timer .pomo-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding-top: 4px; }
+.pomo-back { justify-self: start; color: var(--muted); transition: color .2s; }
+.pomo-back:hover { color: var(--ink); }
+.phases { display: flex; gap: 20px; }
+.phases button { position: relative; color: var(--muted); padding: 4px 0; transition: color .2s; }
+.phases button:hover, .phases button[aria-selected="true"] { color: var(--ink); }
+.phases button::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--amethyst); transform: scaleX(0); transition: transform .35s var(--ease); }
+.phases button[aria-selected="true"]::after { transform: scaleX(1); }
+.phases .sm { display: none; }
+.rounds { justify-self: end; display: flex; gap: 6px; }
+.rounds i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--faint); transition: background-color .4s, border-color .4s; }
+.rounds i.on { background: var(--amethyst); border-color: var(--amethyst); }
+.timer .pomo-ctl { display: flex; align-items: center; gap: 20px; }
+.pomo-ctl button { transition: opacity .2s; }
+.pomo-ctl button:hover { opacity: .6; }
+#timerGo { min-width: 76px; text-align: center; }
+#timerGo[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.wires .progress { opacity: 0; transition: opacity .6s var(--ease); }
+.timing .wires .progress { opacity: 1; }
+.wires .progress circle { fill: none; vector-effect: non-scaling-stroke; }
+.wires .progress .track { stroke: var(--line); stroke-width: 1; }
+.wires .progress .arc { stroke: var(--amethyst); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 0 9999; }
+.clock { transition: opacity .4s var(--ease); }
+.clock.paused { opacity: .5; }
 .stage { position: relative; min-height: 280px; }
 .wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; color: var(--ink); pointer-events: none; }
 .wires .strings path { fill: none; stroke: var(--wire); stroke-width: .75; vector-effect: non-scaling-stroke; stroke-linecap: round; }
@@ -315,6 +346,8 @@ html:not(.js) .case { display: block; margin-bottom: 96px; }
   .app { display: flex; flex-direction: column; height: auto; }
   .right { order: 1; height: calc(100svh - var(--gap) * 2); min-height: 520px; }
   .left { order: 2; height: 70svh; min-height: 460px; }
+  .timer .right { display: none; }
+  .timer .left { height: calc(100svh - var(--gap) * 2); }
   .clock { font-size: 38px; }
 
   :root { --row: 44px; }
@@ -334,6 +367,11 @@ html:not(.js) .case { display: block; margin-bottom: 96px; }
 @media (max-width: 560px) {
   .topbar .email .long { display: none; }
   .topbar .email .short { display: inline; }
+  .phases { gap: 12px; }
+  .phases .lg { display: none; }
+  .phases .sm { display: inline; }
+  .timer .controls { flex-wrap: wrap; row-gap: 16px; }
+  .timer .pomo-ctl { order: -1; width: 100%; justify-content: center; }
   .bottombar h1 span, .bottombar .hint { display: none; }
   .rows li { grid-template-columns: 1fr; gap: 2px; }
   .w-item { font-size: 16px; }
