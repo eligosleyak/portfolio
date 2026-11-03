@@ -345,17 +345,26 @@
     const gArc = mk('g', { class: 'progress' }, svg);
     const track = mk('circle', { class: 'track' }, gArc);
     const arc = mk('circle', { class: 'arc' }, gArc);
-    // A filled amethyst lotus that blooms behind the lines during the final turn of each minute.
-    // Three rings of eight petals; inner rings are shorter, deeper and turn a little faster.
-    const gLotus = mk('g', { class: 'lotus' }, svg);
-    const lotusRings = [
-      { n: 8, len: 0.98, w: 0.42, off: 0 },
-      { n: 8, len: 0.74, w: 0.46, off: Math.PI / 8 },
-      { n: 8, len: 0.5, w: 0.5, off: 0 },
-    ].map((ring, i) => Object.assign(ring, { g: mk('g', { class: `lotus-ring r${i}` }, gLotus) }));
-    // Line layer.
+    // In the final turn of each minute every line folds into its own lotus petal, pointing at its
+    // second. Line s joins ring s % 3, so 60 lines make three rings of 20 petals, offset like scales
+    // (a crown lotus). Values are shares of the space between the digits and the dial.
+    const RINGS = 3;
+    const RING_BASE = [-0.02, 0.17, 0.36];   // where each ring's petals start (inner → outer)
+    const RING_LEN = [0.46, 0.52, 0.64];     // how long they are
+    const RING_FILL = [0.55, 0.4, 0.28];     // inner petals are deeper
+    const petalShape = (v) => Math.pow(Math.sin(Math.PI * v), 0.8) * (1 - 0.38 * v) * 1.25;   // onion dome
+    // Lines, in three ring groups: outer ring first so inner petals sit on top.
     const gStrings = mk('g', { class: 'strings' }, svg);
-    const layers = [0, 1, 2].map((i) => mk('g', { class: `layer l${i}` }, gStrings));
+    const ringGroups = [];
+    [2, 1, 0].forEach((r) => { ringGroups[r] = mk('g', { class: `layer ring r${r}` }, gStrings); });
+    // The centre of the lotus: a disc behind the time with a rosette of circles.
+    const gDisc = mk('g', { class: 'disc' }, svg);
+    const discFace = mk('circle', { class: 'face' }, gDisc);
+    const discTint = mk('circle', { class: 'tint' }, gDisc);
+    const discInner = mk('circle', { class: 'inner' }, gDisc);
+    const rosette = mk('g', { class: 'rosette' }, gDisc);
+    const rosetteCircles = Array.from({ length: 18 }, () => mk('circle', {}, rosette));
+    const aura = $('#aura');
     const gRipples = mk('g', { class: 'ripples' }, svg);
     const converge = [0, 1, 2].map(() => mk('circle', { class: 'converge' }, gRipples));
     const labels = Array.from({ length: 60 }, () => mk('text', {}, gRing));
@@ -382,7 +391,7 @@
     // Each second the whole dial steps one place so the newest second always lands on the
     // same spot (where 00 is drawn). steps counts up forever, so 59 → 00 keeps turning forward.
     let steps = 0, rotFrom = 0, rotTo = 0, rotAt = 0, rotStep = 0, rolledAt = -1e9;
-    let angVel = 0, lastRot = 0, lastFrame = 0;
+    let angVel = 0, lastRot = 0, lastFrame = 0, lotusForm = 0;
     function stepTo(n, now, instant) {
       steps = n;
       rotFrom = instant ? n * STEP : rotStep;
@@ -405,19 +414,12 @@
       [track, arc].forEach((c) => { c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', ar); });
       arc.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
       geo.arcLen = TAU * ar;
-      // Lotus petals, drawn around (0, 0); each ring group is moved and turned in frame().
-      const b0 = R * 0.05;
-      lotusRings.forEach((ring) => {
-        while (ring.g.firstChild) ring.g.firstChild.remove();
-        const L = R * ring.len, w = (L * ring.w) / 2;
-        for (let k = 0; k < ring.n; k++) {
-          const a = ring.off + (k * TAU) / ring.n, ca = Math.cos(a), sa = Math.sin(a);
-          const P = (x, y) => `${(ca * (b0 + x) - sa * y).toFixed(1)},${(sa * (b0 + x) + ca * y).toFixed(1)}`;
-          mk('path', {
-            d: `M${P(0, -w * 0.12)}C${P(L * 0.3, -w * 1.3)} ${P(L * 0.84, -w * 0.85)} ${P(L, 0)}` +
-               `C${P(L * 0.84, w * 0.85)} ${P(L * 0.3, w * 1.3)} ${P(0, w * 0.12)}Z`,
-          }, ring.g);
-        }
+      const dR = rIn - 3;
+      [[discFace, dR], [discTint, dR], [discInner, dR * 0.84]].forEach(([c, r]) => { c.setAttribute('cx', 0); c.setAttribute('cy', 0); c.setAttribute('r', r.toFixed(1)); });
+      const rr = dR * 0.4;
+      rosetteCircles.forEach((c, i) => {
+        const a = (i / rosetteCircles.length) * TAU;
+        c.setAttribute('cx', (Math.cos(a) * rr).toFixed(1)); c.setAttribute('cy', (Math.sin(a) * rr).toFixed(1)); c.setAttribute('r', rr.toFixed(1));
       });
       placedRot = null;
       placeLabels();
@@ -451,6 +453,8 @@
       const drag = s % 2 ? rand(1.05, 1.5) : rand(0.5, 0.95);
       strings.push({
         s, th: angle(s), drag,
+        ring: s % RINGS,                                                    // which ring of the lotus it joins
+        mFix: null,
         twist: age * Math.abs(STEP) * TWIST_K * drag,        // builds up as the dial turns: the line slowly curves
         A: 0,                                                // straight at rest; ripples still make it tremble
         f: rand(1, 2.4),                                     // waves along the line
@@ -458,7 +462,7 @@
         phi: rand(0, TAU),
         born: now + delay, pluckAt: now + delay + GROW_MS * 0.75, pluckAmp: rand(5, 9),
         retractAt: null,
-        path: mk('path', { class: 'petal' }, layers[0]),
+        path: mk('path', { class: 'petal' }, ringGroups[s % RINGS]),
       });
     }
 
@@ -494,7 +498,8 @@
       strings
         .filter((st) => st.retractAt === null)
         .sort((a, b) => a.s - b.s)
-        .forEach((st, i) => { st.retractAt = now + i * 9; });
+        .forEach((st, i) => { st.retractAt = now + i * 9; st.mFix = lotusForm; });   // keep the lotus shape while closing
+      lotusForm = 0;
     }
 
     function startOver(now, key) {
@@ -528,33 +533,35 @@
       } else angVel = 0;
       lastRot = rot; lastFrame = now;
 
-      // The amethyst lotus: opens through the turn, then swells a touch and fades as the minute changes.
-      let lv = 0, ls = 1;
-      if (!still()) {
-        if (turn > 0) { lv = smoothstep(Math.min(1, turn * 1.5)); ls = 0.3 + 0.7 * ease(turn); }
-        else if (now - rolledAt < 1300) { const f = (now - rolledAt) / 1300; lv = 1 - smoothstep(f); ls = 1 + 0.1 * ease(f); }
-      }
-      gLotus.style.opacity = lv.toFixed(3);
-      if (lv > 0.001) {
-        lotusRings.forEach((ring, i) => {
-          // Extra turn per ring is a multiple of 45°, so the 8-fold lotus never jumps when the minute resets.
-          const deg = ((rot + (spin * i) / 8) * 180) / Math.PI;
-          ring.g.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)}) rotate(${deg.toFixed(2)}) scale(${ls.toFixed(3)})`);
-        });
+      // How far the lines have folded into the lotus: only during the final turn.
+      const form = still() ? 0 : smoothstep(clamp(turn * 1.3, 0, 1));
+      if (turn > 0) lotusForm = form;                      // remembered past :00 so the closing lotus keeps its shape
+      // The lotus's centre and glow: with the bloom, then fading after :00.
+      let bloom = form;
+      if (turn <= 0 && !still() && now - rolledAt < 900) bloom = 1 - smoothstep((now - rolledAt) / 900);
+      if (aura) aura.style.opacity = (bloom * 0.95).toFixed(3);
+      gDisc.style.opacity = bloom.toFixed(3);
+      if (bloom > 0.001) {
+        gDisc.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)})`);
+        rosette.setAttribute('transform', `rotate(${((-rot * 180 / Math.PI) * 1.5).toFixed(2)}) scale(${(0.6 + 0.4 * bloom).toFixed(3)})`);
       }
       placeLabels();
 
+      const span = R - rIn;
+      const half = Math.PI / 20;                           // half the angle between petals in one ring
+
       strings = strings.filter((st) => {
-        // How far along its edge the line is drawn: it grows out from the centre to the tip,
-        // and at the end of the minute it draws back into the centre.
-        let end = 1;
+        // How much of the line is drawn, and (for a closing lotus) how far its petal has shrunk.
+        const m = st.mFix === null ? form : st.mFix;
+        let end = 1, shrink = 1;
         if (st.retractAt !== null) {
           const r = still() ? 1 : clamp((now - st.retractAt) / RETRACT_MS, 0, 1);
           if (r >= 1) { st.path.remove(); return false; }
-          end = 1 - ease(r);
+          if (m > 0.001) shrink = 1 - ease(r);             // petals fold back into the centre
+          else end = 1 - ease(r);                            // plain lines draw back in
         }
         if (!still()) end = Math.min(end, ease(clamp((now - st.born) / GROW_MS, 0, 1)));
-        if (end < 0.005) { st.path.setAttribute('d', ''); return true; }
+        if (end < 0.005 || shrink < 0.005) { st.path.setAttribute('d', ''); return true; }
 
         const th = st.th + rot;
         const dx = Math.cos(th), dy = Math.sin(th), nx = -dy, ny = dx;
@@ -564,6 +571,14 @@
         const trail = st.twist - angVel * LAG_K * st.drag;
         const pl = !still() && now >= st.pluckAt ? st.pluckAmp * Math.exp(-(now - st.pluckAt) / 480) : 0;
         const A = st.A + pl;
+
+        // Its petal: from the ring's base out to a point, aimed at the line's own second.
+        let base = 0, L = 0, W = 0;
+        if (m > 0.001) {
+          base = rIn + span * RING_BASE[st.ring];
+          L = span * RING_LEN[st.ring];
+          W = Math.min(L * 0.42, (base + L * 0.4) * Math.sin(half) * 1.3);
+        }
 
         let d = '';
         for (let i = 0; i <= SAMPLES; i++) {
@@ -577,10 +592,20 @@
             const cl = Math.cos(lag), sl = Math.sin(lag);
             [px, py] = [px * cl - py * sl, px * sl + py * cl];
           }
-          d += `${i ? 'L' : 'M'}${(cx + px).toFixed(1)},${(cy + py).toFixed(1)}`;
+          if (m > 0.001) {
+            // Trace the petal: first half up one edge to the tip, second half back down the other.
+            const v = u <= 0.5 ? u * 2 : (1 - u) * 2;
+            const side = u <= 0.5 ? -1 : 1;
+            const qx = base + L * v, qy = side * W * petalShape(v);
+            px += (dx * qx + nx * qy - px) * m;
+            py += (dy * qx + ny * qy - py) * m;
+          }
+          d += `${i ? 'L' : 'M'}${(cx + px * shrink).toFixed(1)},${(cy + py * shrink).toFixed(1)}`;
         }
-        st.path.setAttribute('d', d);
-        st.path.classList.toggle('now', st.s === current && st.retractAt === null);
+        st.path.setAttribute('d', m > 0.5 ? d + 'Z' : d);
+        st.path.style.fillOpacity = m > 0.001 ? (m * m * RING_FILL[st.ring]).toFixed(3) : '0';
+        st.path.classList.toggle('formed', m > 0.4);
+        st.path.classList.toggle('now', st.s === current && st.retractAt === null && m < 0.4);
         return true;
       });
 
