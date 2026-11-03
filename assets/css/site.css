@@ -112,66 +112,15 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
 .pomo-ctl button:hover { opacity: .6; }
 #timerGo { min-width: 76px; text-align: center; }
 #timerGo[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-.wires .progress { opacity: 0; transition: opacity .6s var(--ease); }
-.timing .wires .progress { opacity: 1; }
-.wires .progress circle { fill: none; vector-effect: non-scaling-stroke; }
-.wires .progress .track { stroke: var(--line); stroke-width: 1; }
-.wires .progress .arc { stroke: var(--amethyst); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 0 9999; }
-.clock { transition: opacity .4s var(--ease); }
-.clock.paused { opacity: .5; }
-.stage { position: relative; min-height: 280px; }
-.wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; color: var(--ink); pointer-events: none; }
-/* Lotus drawn in lines: each line is half a petal's outline. */
-.wires .petal {
-  fill: var(--amethyst); fill-opacity: 0; stroke: var(--wire); stroke-width: .75; stroke-linejoin: round; stroke-linecap: round;
-  vector-effect: non-scaling-stroke; transition: stroke .4s var(--ease);
+/* The clock is the <lotus-clock> web component, themed with the site's tokens and
+   sized to the largest square that fits the panel (the Pomodoro widens the panel). */
+.stage { position: relative; min-height: 280px; display: grid; place-items: center; container-type: size; }
+lotus-clock {
+  width: min(100cqw, 100cqh); min-width: 0; min-height: 0;
+  --lc-ink: var(--ink); --lc-accent: var(--amethyst); --lc-line: var(--wire);
+  --lc-glow: var(--amethyst-glow); --lc-paper-solid: var(--paper);
+  --lc-font-display: var(--display); --lc-font-mono: var(--mono);
 }
-.wires .petal.now { stroke: var(--amethyst); stroke-opacity: .9; }
-/* The filled amethyst lotus seen during the final turn of each minute. */
-/* Crown lotus in the final turn: each line becomes a filled petal; a disc, rosette and glow at the centre. */
-.wires .petal.formed { stroke: var(--amethyst); stroke-opacity: .85; }
-.aura {
-  position: absolute; inset: -6%; pointer-events: none; opacity: 0;
-  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--amethyst) 34%, transparent) 0%, color-mix(in srgb, var(--amethyst) 14%, transparent) 42%, transparent 68%);
-}
-.wires .disc { opacity: 0; }
-.wires .disc .face { fill: var(--paper); }
-.wires .disc .tint { fill: var(--amethyst); fill-opacity: .12; stroke: var(--amethyst); stroke-opacity: .55; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.wires .disc .inner { fill: none; stroke: var(--amethyst); stroke-opacity: .4; stroke-width: .75; vector-effect: non-scaling-stroke; }
-.wires .disc .rosette circle { fill: none; stroke: var(--amethyst); stroke-opacity: .45; stroke-width: .7; vector-effect: non-scaling-stroke; }
-.wires text {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .04em; font-variant-numeric: tabular-nums;
-  fill: currentColor; text-anchor: middle; dominant-baseline: central;
-  opacity: 0; transition: opacity .5s var(--ease);
-}
-.wires text.on { opacity: .42; }
-.wires text.now { opacity: 1; font-weight: 500; }
-.wires .ripple { fill: none; stroke: currentColor; stroke-opacity: .5; stroke-width: .75; vector-effect: non-scaling-stroke; }
-.wires .ripple.big { stroke: var(--amethyst); stroke-opacity: .55; }
-.wires .converge { fill: none; stroke: var(--amethyst); stroke-opacity: .75; stroke-width: .9; vector-effect: non-scaling-stroke; opacity: 0; }
-/* At :00 two amethyst rings ripple out through the digits. */
-.clock-glow {
-  color: var(--amethyst); pointer-events: none; opacity: 0;
-  text-shadow: 0 0 6px var(--amethyst-glow), 0 0 18px var(--amethyst-glow);
-  -webkit-mask-image: radial-gradient(circle closest-side, transparent 58%, #000 74%, transparent 90%), radial-gradient(circle closest-side, transparent 58%, #000 74%, transparent 90%);
-          mask-image: radial-gradient(circle closest-side, transparent 58%, #000 74%, transparent 90%), radial-gradient(circle closest-side, transparent 58%, #000 74%, transparent 90%);
-  -webkit-mask-position: center; mask-position: center;
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-  -webkit-mask-size: 0 0, 0 0; mask-size: 0 0, 0 0;
-}
-.bowl { position: absolute; z-index: 2; border-radius: 50%; background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.bowl:focus-visible { outline: 1.5px solid var(--amethyst); outline-offset: 4px; border-radius: 50%; }
-.clock .roll { display: inline-block; animation: roll .7s var(--ease); }
-@keyframes roll { from { opacity: 0; transform: translateY(.35em); filter: blur(4px); } }
-.clock {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  display: flex; align-items: baseline;
-  font-family: var(--display); font-weight: 700;
-  font-size: clamp(40px, 4.1vw, 60px); line-height: 1; letter-spacing: -0.045em;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.colon { margin: 0 .16em; transform: translateY(-.06em); transition: opacity .25s linear; }
-.colon.dim { opacity: .3; }
 .controls { display: flex; justify-content: space-between; align-items: center; }
 .controls button { transition: opacity .2s; }
 .controls button:hover { opacity: .6; }
@@ -380,7 +329,6 @@ html:not(.js) .case { display: block; margin-bottom: 96px; }
   .left { order: 2; height: 70svh; min-height: 460px; }
   .timer .right { display: none; }
   .timer .left { height: calc(100svh - var(--gap) * 2); }
-  .clock { font-size: 38px; }
 
   :root { --row: 44px; }
   .cluster { padding: 0 var(--pad); grid-template-columns: 1fr 40px 1fr; height: calc(var(--row) * 4); }

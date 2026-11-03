@@ -62,13 +62,7 @@
     </div>
 
     <div class="stage" id="stage">
-      <div class="aura" id="aura" aria-hidden="true"></div>
-      <svg class="wires" id="wires" aria-hidden="true"></svg>
-      <time class="clock" id="clock" aria-label="Local time in Kathmandu">
-        <span id="hh">--</span><span class="colon" id="colon">:</span><span id="mm">--</span>
-      </time>
-      <div class="clock clock-glow" id="clockGlow" aria-hidden="true"></div>
-      <button type="button" class="bowl" id="bowl" aria-label="Ring the singing bowl" title="Ring the bowl"></button>
+      <lotus-clock id="lotus" time-zone="Asia/Kathmandu"></lotus-clock>
     </div>
 
     <div class="controls mono">
@@ -321,6 +315,7 @@
   </section>
 </div>
 
+<script type="module" src="assets/js/lotus-clock.js"></script>
 <script src="assets/js/site.js" defer></script>
 </body>
 </html>

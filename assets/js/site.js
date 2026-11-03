@@ -13,9 +13,8 @@
      Everything is generated with Web Audio (no audio files):
      - strike(): fundamental + a partner 1.8 Hz above (slow beating) + two
        inharmonic bronze partials (x2.71, x4.83) that fade twice as fast.
-     - sing():   a breathy rim-rub swell, used for the project wheel and the
-       final turn of each minute.
-     - drop():   a soft water-drop for each second's ripple.
+     - sing():   a breathy rim-rub swell, used for the project wheel.
+     (The clock's own sounds live in the <lotus-clock> component.)
      All of it runs through a warm low-pass, a small generated room reverb and
      a faint echo. Ambient sound is off until SOUND is pressed. */
   const sound = (() => {
@@ -99,21 +98,6 @@
       src.stop(t + attack + release + 0.1);
     }
 
-    function drop(delay = 0) {
-      const t = ctx.currentTime + delay + 0.01;
-      const f = PENTA[Math.floor(Math.random() * PENTA.length)] * 4;
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = 'sine';
-      o.frequency.setValueAtTime(f * 0.7, t);                 // a droplet "bloop" rises in pitch
-      o.frequency.exponentialRampToValueAtTime(f * 1.15, t + 0.09);
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(0.03, t + 0.006);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-      o.connect(g).connect(bus);
-      o.start(t);
-      o.stop(t + 0.4);
-    }
-
     function wake() {
       clearTimeout(offTimer);
       ctx.resume();
@@ -136,16 +120,13 @@
         offTimer = setTimeout(() => { if (!on) ctx.suspend(); }, 500);
       }
     }
-    btn.addEventListener('click', () => setOn(!on));
+    btn.addEventListener('click', () => { setOn(!on); document.getElementById('lotus')?.toggleAttribute('sound', on); });
 
     const ambient = (fn) => { if (on && ctx) fn(); };
     return {
       ROOT, PENTA,
-      ripple(delay) { ambient(() => drop(delay)); },
       step(i) { ambient(() => sing(PENTA[i % PENTA.length])); },
       strike(f) { ambient(() => strike(f || ROOT, 0.12, 6)); },
-      spin(seconds) { ambient(() => sing(ROOT, 0.05, Math.max(0.5, seconds), 3.5)); },
-      minute() { ambient(() => { strike(ROOT, 0.2, 9); strike(ROOT / 2, 0.09, 10); }); },
       click() { ambient(() => strike(432, 0.05, 3)); },
       // Starting the timer is a gesture, so the audio can be readied for the end-of-session bell.
       prime() { if (init()) { wake(); clearTimeout(offTimer); } },
@@ -179,7 +160,10 @@
   /* ================= Timer (pomodoro) state =================
      25 min focus, 5 min short break, 15 min long break after every 4th focus.
      State lives in localStorage so a refresh keeps the countdown going. */
-  let clock = null;                                         // set below, once the clock exists
+  // The clock is the <lotus-clock> web component (assets/js/lotus-clock.js).
+  const lc = $('#lotus');
+  const lcReady = window.customElements ? customElements.whenDefined('lotus-clock') : new Promise(() => {});
+  const inTimerView = () => root.classList.contains('timer');
   const timer = (() => {
     const MIN = 60000;
     const DUR = { focus: 25 * MIN, short: 5 * MIN, long: 15 * MIN };
@@ -219,7 +203,7 @@
       st.running = false;
       st.remMs = DUR[p];
       save(); ui();
-      if (clock) clock.restart();
+      syncClock(true);
     }
 
     function advance(announce) {
@@ -236,19 +220,31 @@
       st.endAt = Date.now() + st.remMs;
       sound.prime();
       save(); ui();
+      syncClock(false);
     }
     function pause() {
       if (!st.running) return;
       st.remMs = remaining();
       st.running = false;
       save(); ui();
+      syncClock(false);
     }
 
-    // Called by the clock when the countdown reaches 00:00.
+    // While the Pomodoro is open, the clock counts down with the timer.
+    function syncClock(restart) {
+      if (!inTimerView()) return;
+      lcReady.then(() => {
+        if (restart || lc.mode !== 'countdown') lc.countdown(remaining(), { autostart: st.running });
+        else if (st.running) lc.start(); else lc.pause();
+      });
+    }
+
+    // The countdown reached 00:00 (checked every 250 ms, whichever view is open).
     function finish() {
       st.running = false; st.remMs = 0; save(); ui();
       live.textContent = `${NAME[st.phase]} complete.`;
-      sound.session();
+      // In the Pomodoro view with sound on, the clock rings its own bowl; otherwise ring ours.
+      if (!(inTimerView() && lc.hasAttribute('sound'))) sound.session();
       clearTimeout(advanceTimer);
       advanceTimer = setTimeout(() => advance(true), 5200);
     }
@@ -258,6 +254,7 @@
 
     // Small timer in the top-right corner while a session is on and you're elsewhere on the site.
     function paintMini() {
+      if (st.running && remaining() <= 0) { finish(); return; }
       const r = remaining(), tot = Math.ceil(r / 1000);
       const txt = `${String(Math.floor(tot / 60)).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`;
       const inView = root.classList.contains('timer');
@@ -281,6 +278,7 @@
 
     return {
       paint: () => paintMini(),
+      sync: syncClock,
       remaining, finish,
       running: () => st.running,
       total: () => DUR[st.phase],
@@ -289,457 +287,7 @@
     };
   })();
 
-  /* ================= Kinetic clock: a lotus of time =================
-     The dial has 60 points. In clock mode they are the seconds of the
-     current minute in Kathmandu; in timer mode they are the countdown's
-     seconds. Each second a line grows from the centre of the time out to
-     one fixed spot on the dial, and the whole dial steps one place round,
-     so older lines and numbers move on and the newest always lands on the
-     same spot. Neighbouring lines bow opposite ways and cross into a lotus;
-     over a minute the dial turns one full circle.
-     At the end of each minute amethyst rings close in, a ripple of light
-     runs through the digits, and the lines draw back into the centre. */
-  clock = (() => {
-    const stage = $('#stage'), svg = $('#wires');
-    const hh = $('#hh'), mm = $('#mm'), colon = $('#colon'), clockEl = $('#clock'), glow = $('#clockGlow'), bowl = $('#bowl');
-    const NS = 'http://www.w3.org/2000/svg';
-    const pad = (n) => String(n).padStart(2, '0');
-    const fmt = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Kathmandu', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-    });
-    // Where the clock reads its time from.
-    const wallClock = {
-      read() {
-        const p = {};
-        fmt.formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
-        return { a: p.hour, b: p.minute, slot: +p.second, key: p.hour + p.minute, aria: `Local time in Kathmandu ${p.hour}:${p.minute}` };
-      },
-      msm: () => Date.now() % 60000,                    // NPT is a whole-minute offset from UTC
-      label: (k) => pad(k),
-      nextTick: () => 1000 - (Date.now() % 1000) + 5,
-      onRoll: () => sound.minute(),
-    };
-    const countdown = {
-      read() {
-        const r = timer.remaining();
-        const tot = Math.ceil(r / 1000), m = Math.floor(tot / 60), s = tot % 60;
-        return {
-          a: pad(m), b: pad(s), slot: (60 - s) % 60, key: String(Math.ceil(r / 60000)),
-          aria: `${timer.name()}: ${m} minutes ${s} seconds left`,
-        };
-      },
-      msm() { const r = timer.remaining(), k = Math.ceil(r / 60000); return 60000 - (r - (k - 1) * 60000); },
-      label: (k) => pad((60 - k) % 60),
-      nextTick: () => (timer.running() ? (timer.remaining() % 1000) + 5 : 200),
-      onRoll: (key) => { if (key === '0') timer.finish(); else sound.ripple(0); },
-    };
-    let source = wallClock;
-
-    const mk = (tag, attrs, parent) => {
-      const e = document.createElementNS(NS, tag);
-      Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
-      parent.appendChild(e);
-      return e;
-    };
-    const gRing = mk('g', { class: 'ring' }, svg);
-    const gArc = mk('g', { class: 'progress' }, svg);
-    const track = mk('circle', { class: 'track' }, gArc);
-    const arc = mk('circle', { class: 'arc' }, gArc);
-    // In the final turn of each minute every line folds into its own lotus petal, pointing at its
-    // second. Line s joins ring s % 3, so 60 lines make three rings of 20 petals, offset like scales
-    // (a crown lotus). Values are shares of the space between the digits and the dial.
-    const RINGS = 3;
-    const RING_BASE = [-0.02, 0.17, 0.36];   // where each ring's petals start (inner → outer)
-    const RING_LEN = [0.46, 0.52, 0.64];     // how long they are
-    const RING_FILL = [0.55, 0.4, 0.28];     // inner petals are deeper
-    const petalShape = (v) => Math.pow(Math.sin(Math.PI * v), 0.8) * (1 - 0.38 * v) * 1.25;   // onion dome
-    // Lines, in three ring groups: outer ring first so inner petals sit on top.
-    const gStrings = mk('g', { class: 'strings' }, svg);
-    const ringGroups = [];
-    [2, 1, 0].forEach((r) => { ringGroups[r] = mk('g', { class: `layer ring r${r}` }, gStrings); });
-    // The centre of the lotus: a disc behind the time with a rosette of circles.
-    const gDisc = mk('g', { class: 'disc' }, svg);
-    const discFace = mk('circle', { class: 'face' }, gDisc);
-    const discTint = mk('circle', { class: 'tint' }, gDisc);
-    const discInner = mk('circle', { class: 'inner' }, gDisc);
-    const rosette = mk('g', { class: 'rosette' }, gDisc);
-    const rosetteCircles = Array.from({ length: 18 }, () => mk('circle', {}, rosette));
-    const aura = $('#aura');
-    const gRipples = mk('g', { class: 'ripples' }, svg);
-    const converge = [0, 1, 2].map(() => mk('circle', { class: 'converge' }, gRipples));
-    const labels = Array.from({ length: 60 }, () => mk('text', {}, gRing));
-    const relabel = () => labels.forEach((t, k) => { t.textContent = source.label(k); });
-    relabel();
-
-    const GROW_MS = 800, RETRACT_MS = 750, GLOW_MS = 1700, SAMPLES = 40;
-    const LAG_K = 250;                                // extra trail while moving: lag (rad) per rad/ms of spin
-    const TWIST_K = 0.26;                             // twist a line keeps per radian the dial has turned since it arrived
-    const SPIN_FROM = 56000, CONVERGE_FROM = 58200;   // ms into the minute
-    const TAU = Math.PI * 2;
-    const STEP = -TAU / 60, STEP_MS = 650;            // the dial steps one place per second (counterclockwise)
-    // The newest second lands just below the right-hand side; older ones travel
-    // counterclockwise, up and over the top, as the dial steps round.
-    const angle = (s) => 0.14 + s * (Math.PI / 30);
-    const rand = (a, b) => a + Math.random() * (b - a);
-    const ease = (t) => 1 - Math.pow(1 - t, 3);
-    const inOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-    const smoothstep = (x) => x * x * (3 - 2 * x);
-    const still = () => reduceMotion.matches;
-
-    let geo = null, strings = [], ripples = [], current = -1, minuteKey = null, raf = 0, onScreen = true;
-    let rot = 0, placedRot = null, glowAt = -1, tickTimer = 0;
-    // Each second the whole dial steps one place so the newest second always lands on the
-    // same spot (where 00 is drawn). steps counts up forever, so 59 → 00 keeps turning forward.
-    let steps = 0, rotFrom = 0, rotTo = 0, rotAt = 0, rotStep = 0, rolledAt = -1e9;
-    let angVel = 0, lastRot = 0, lastFrame = 0, lotusForm = 0;
-    function stepTo(n, now, instant) {
-      steps = n;
-      rotFrom = instant ? n * STEP : rotStep;
-      rotTo = n * STEP;
-      rotAt = now;
-    }
-
-    const live = (s) => strings.some((st) => st.s === s && st.retractAt === null);
-
-    function measure() {
-      const s = stage.getBoundingClientRect(), k = clockEl.getBoundingClientRect();
-      if (!s.width || !k.width) return;
-      const cx = k.left - s.left + k.width / 2, cy = k.top - s.top + k.height / 2;
-      const R = Math.max(70, Math.min(s.width, s.height) / 2 - 26);
-      const rIn = Math.min(R - 30, k.width / 2 + 16);          // the clear circle around the digits
-      geo = { cx, cy, R, rIn, sparse: (TAU * R) / 60 < 22 };
-      svg.setAttribute('viewBox', `0 0 ${s.width} ${s.height}`);
-      Object.assign(bowl.style, { left: `${cx - rIn}px`, top: `${cy - rIn}px`, width: `${rIn * 2}px`, height: `${rIn * 2}px` });
-      const ar = rIn - 7;
-      [track, arc].forEach((c) => { c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', ar); });
-      arc.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
-      geo.arcLen = TAU * ar;
-      const dR = rIn - 3;
-      [[discFace, dR], [discTint, dR], [discInner, dR * 0.84]].forEach(([c, r]) => { c.setAttribute('cx', 0); c.setAttribute('cy', 0); c.setAttribute('r', r.toFixed(1)); });
-      const rr = dR * 0.4;
-      rosetteCircles.forEach((c, i) => {
-        const a = (i / rosetteCircles.length) * TAU;
-        c.setAttribute('cx', (Math.cos(a) * rr).toFixed(1)); c.setAttribute('cy', (Math.sin(a) * rr).toFixed(1)); c.setAttribute('r', rr.toFixed(1));
-      });
-      placedRot = null;
-      placeLabels();
-      paintLabels();
-    }
-
-    function placeLabels() {
-      if (!geo || placedRot === rot) return;
-      placedRot = rot;
-      labels.forEach((t, sec) => {
-        const th = angle(sec) + rot;
-        t.setAttribute('x', (geo.cx + Math.cos(th) * (geo.R + 13)).toFixed(1));
-        t.setAttribute('y', (geo.cy + Math.sin(th) * (geo.R + 13)).toFixed(1));
-      });
-    }
-
-    function paintLabels() {
-      if (!geo) return;
-      labels.forEach((t, s) => {
-        const isNow = s === current;
-        t.classList.toggle('on', isNow || (live(s) && (!geo.sparse || s % 5 === 0)));
-        t.classList.toggle('now', isNow);
-      });
-    }
-
-    // Every line arrives straight, from the centre of the time out to its second. Its shape comes
-    // from the dial turning: each step leaves a little twist behind, so older lines curve more.
-    // Neighbours twist by different amounts, so over the minute their curves cross into a
-    // lotus, and the fast final turn tangles them. `age` = seconds already passed (on load).
-    function addString(s, now, delay, age = 0) {
-      const drag = s % 2 ? rand(1.05, 1.5) : rand(0.5, 0.95);
-      strings.push({
-        s, th: angle(s), drag,
-        ring: s % RINGS,                                                    // which ring of the lotus it joins
-        mFix: null,
-        twist: age * Math.abs(STEP) * TWIST_K * drag,        // builds up as the dial turns: the line slowly curves
-        A: 0,                                                // straight at rest; ripples still make it tremble
-        f: rand(1, 2.4),                                     // waves along the line
-        w: rand(1.2, 2.8),                                   // outward travel speed
-        phi: rand(0, TAU),
-        born: now + delay, pluckAt: now + delay + GROW_MS * 0.75, pluckAmp: rand(5, 9),
-        retractAt: null,
-        path: mk('path', { class: 'petal' }, ringGroups[s % RINGS]),
-      });
-    }
-
-    function tipOf(s) {
-      const th = angle(s) + rot;
-      return [geo.cx + Math.cos(th) * geo.R, geo.cy + Math.sin(th) * geo.R];
-    }
-
-    function addRipple(x, y, t0, dur, r0, r1, big) {
-      ripples.push({ x, y, t0, dur, r0, r1, c: mk('circle', { class: big ? 'ripple big' : 'ripple' }, gRipples) });
-    }
-
-    function pluck(s, now) {
-      const [x, y] = tipOf(s);                                // where the new line lands (and joins its pair)
-      addRipple(x, y, now, 1100, 0, 30, false);
-      addRipple(x, y, now + 160, 1100, 0, 18, false);
-      strings.forEach((st) => {
-        if (st.s === s || st.retractAt !== null) return;
-        let d = Math.abs(st.s - s); d = Math.min(d, 60 - d);
-        const strength = 8 * Math.exp(-d / 5);
-        if (strength < 0.4) return;
-        st.pluckAt = now + d * 45;                            // the ripple reaches farther strings later
-        st.pluckAmp = strength;
-      });
-    }
-
-    function highlight(h, m) {
-      glow.innerHTML = `<span>${h}</span><span class="colon">:</span><span>${m}</span>`;
-      glowAt = performance.now();
-    }
-
-    function pullIn(now) {
-      strings
-        .filter((st) => st.retractAt === null)
-        .sort((a, b) => a.s - b.s)
-        .forEach((st, i) => { st.retractAt = now + i * 9; st.mFix = lotusForm; });   // keep the lotus shape while closing
-      lotusForm = 0;
-    }
-
-    function startOver(now, key) {
-      rolledAt = now;
-      pullIn(now);
-      if (geo) for (let k = 0; k < 3; k++) addRipple(geo.cx, geo.cy, now + k * 200, 1500, geo.rIn, geo.R + 30, true);
-      source.onRoll(key);
-    }
-
-    function frame(now) {
-      raf = 0;
-      if (!geo) return;
-      const t = still() ? 0 : now / 1000;
-      const { cx, cy, R, rIn } = geo;
-      const msm = source.msm();
-
-      // Step the dial round: the newest second glides onto the fixed spot.
-      const sp = still() ? 1 : clamp((now - rotAt) / STEP_MS, 0, 1);
-      rotStep = rotFrom + (rotTo - rotFrom) * inOut(sp);
-      // Then, in the last seconds of the minute, one full extra turn (same direction), landing on :00.
-      const turn = still() ? 0 : clamp((msm - SPIN_FROM) / (60000 - SPIN_FROM), 0, 1);
-      const spin = -TAU * inOut(turn);
-      rot = rotStep + spin;
-      // How fast the dial is turning (rad/ms, smoothed). Lines trail behind in proportion.
-      let dr = 0;
-      if (!still() && lastFrame) {
-        dr = rot - lastRot;
-        dr -= TAU * Math.round(dr / TAU);                   // the minute reset is a whole turn: ignore it
-        const v = clamp(dr / Math.max(1, now - lastFrame), -0.008, 0.008);
-        angVel += (v - angVel) * 0.3;
-      } else angVel = 0;
-      lastRot = rot; lastFrame = now;
-
-      // How far the lines have folded into the lotus: only during the final turn.
-      const form = still() ? 0 : smoothstep(clamp(turn * 1.3, 0, 1));
-      if (turn > 0) lotusForm = form;                      // remembered past :00 so the closing lotus keeps its shape
-      // The lotus's centre and glow: with the bloom, then fading after :00.
-      let bloom = form;
-      if (turn <= 0 && !still() && now - rolledAt < 900) bloom = 1 - smoothstep((now - rolledAt) / 900);
-      if (aura) aura.style.opacity = (bloom * 0.95).toFixed(3);
-      gDisc.style.opacity = bloom.toFixed(3);
-      if (bloom > 0.001) {
-        gDisc.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)})`);
-        rosette.setAttribute('transform', `rotate(${((-rot * 180 / Math.PI) * 1.5).toFixed(2)}) scale(${(0.6 + 0.4 * bloom).toFixed(3)})`);
-      }
-      placeLabels();
-
-      const span = R - rIn;
-      const half = Math.PI / 20;                           // half the angle between petals in one ring
-
-      strings = strings.filter((st) => {
-        // How much of the line is drawn, and (for a closing lotus) how far its petal has shrunk.
-        const m = st.mFix === null ? form : st.mFix;
-        let end = 1, shrink = 1;
-        if (st.retractAt !== null) {
-          const r = still() ? 1 : clamp((now - st.retractAt) / RETRACT_MS, 0, 1);
-          if (r >= 1) { st.path.remove(); return false; }
-          if (m > 0.001) shrink = 1 - ease(r);             // petals fold back into the centre
-          else end = 1 - ease(r);                            // plain lines draw back in
-        }
-        if (!still()) end = Math.min(end, ease(clamp((now - st.born) / GROW_MS, 0, 1)));
-        if (end < 0.005 || shrink < 0.005) { st.path.setAttribute('d', ''); return true; }
-
-        const th = st.th + rot;
-        const dx = Math.cos(th), dy = Math.sin(th), nx = -dy, ny = dx;
-        // Every bit the dial turns leaves a bit of twist in the line (it never springs back),
-        // plus a little extra trail while it's moving. Counterclockwise turning → clockwise trail.
-        st.twist -= dr * TWIST_K * st.drag;
-        const trail = st.twist - angVel * LAG_K * st.drag;
-        const pl = !still() && now >= st.pluckAt ? st.pluckAmp * Math.exp(-(now - st.pluckAt) / 480) : 0;
-        const A = st.A + pl;
-
-        // Its petal: from the ring's base out to a point, aimed at the line's own second.
-        let base = 0, L = 0, W = 0;
-        if (m > 0.001) {
-          base = rIn + span * RING_BASE[st.ring];
-          L = span * RING_LEN[st.ring];
-          W = Math.min(L * 0.42, (base + L * 0.4) * Math.sin(half) * 1.3);
-        }
-
-        let d = '';
-        for (let i = 0; i <= SAMPLES; i++) {
-          const u = end * (i / SAMPLES);
-          const x = R * u;
-          // Straight line; ripples add a brief tremble that travels outward (both ends stay put).
-          const y = A ? A * Math.sin(2 * Math.PI * st.f * u - st.w * t + st.phi) * Math.sin(Math.PI * u) : 0;
-          let px = dx * x + nx * y, py = dy * x + ny * y;
-          if (Math.abs(trail) > 0.0005) {
-            const lag = trail * (1 - u) ** 1.3;               // the inner part trails the motion the most
-            const cl = Math.cos(lag), sl = Math.sin(lag);
-            [px, py] = [px * cl - py * sl, px * sl + py * cl];
-          }
-          if (m > 0.001) {
-            // Trace the petal: first half up one edge to the tip, second half back down the other.
-            const v = u <= 0.5 ? u * 2 : (1 - u) * 2;
-            const side = u <= 0.5 ? -1 : 1;
-            const qx = base + L * v, qy = side * W * petalShape(v);
-            px += (dx * qx + nx * qy - px) * m;
-            py += (dy * qx + ny * qy - py) * m;
-          }
-          d += `${i ? 'L' : 'M'}${(cx + px * shrink).toFixed(1)},${(cy + py * shrink).toFixed(1)}`;
-        }
-        st.path.setAttribute('d', m > 0.5 ? d + 'Z' : d);
-        st.path.style.fillOpacity = m > 0.001 ? (m * m * RING_FILL[st.ring]).toFixed(3) : '0';
-        st.path.classList.toggle('formed', m > 0.4);
-        st.path.classList.toggle('now', st.s === current && st.retractAt === null && m < 0.4);
-        return true;
-      });
-
-      // Session progress, timer mode only: an amethyst arc round the digits.
-      if (source === countdown) {
-        const done = 1 - timer.remaining() / timer.total();
-        arc.style.strokeDasharray = `${(geo.arcLen * done).toFixed(1)} ${geo.arcLen.toFixed(1)}`;
-      }
-
-      // Rings close in from the dial and meet the digits at :00.
-      const cv = still() ? 0 : clamp((msm - CONVERGE_FROM) / (60000 - CONVERGE_FROM), 0, 1);
-      converge.forEach((el, i) => {
-        const p = clamp(cv - i * 0.12, 0, 1);
-        if (p <= 0) { el.style.opacity = '0'; return; }
-        el.setAttribute('cx', cx.toFixed(1));
-        el.setAttribute('cy', cy.toFixed(1));
-        el.setAttribute('r', (R + (rIn - R) * p * p * p).toFixed(1));
-        el.style.opacity = (Math.min(1, p * 4) * (0.7 - i * 0.2)).toFixed(3);
-      });
-
-      // Amethyst ripple through the digits: two rings widening from the centre of the time.
-      if (glowAt >= 0) {
-        const gp = (now - glowAt) / GLOW_MS;
-        if (gp >= 1 || still()) { glow.style.opacity = '0'; glowAt = -1; }
-        else {
-          // The ring band sits at 29–45% of the mask size, so this carries it just past the digits.
-          const span = Math.max(260, (clockEl.offsetWidth / 2) / 0.28);
-          const a = smoothstep(gp) * span, b = smoothstep(clamp((gp - 0.18) / 0.82, 0, 1)) * span;
-          const size = `${a.toFixed(0)}px ${a.toFixed(0)}px, ${b.toFixed(0)}px ${b.toFixed(0)}px`;
-          glow.style.webkitMaskSize = size;
-          glow.style.maskSize = size;
-          glow.style.opacity = '1';
-        }
-      }
-
-      ripples = ripples.filter((rp) => {
-        const p = (now - rp.t0) / rp.dur;
-        if (p >= 1 || still()) { rp.c.remove(); return false; }
-        if (p < 0) { rp.c.style.opacity = '0'; return true; }
-        rp.c.setAttribute('cx', rp.x.toFixed(1));
-        rp.c.setAttribute('cy', rp.y.toFixed(1));
-        rp.c.setAttribute('r', (rp.r0 + ease(p) * (rp.r1 - rp.r0)).toFixed(1));
-        rp.c.style.opacity = ((1 - p) * (1 - p)).toFixed(3);
-        return true;
-      });
-
-      if (!still() && onScreen && !document.hidden) raf = requestAnimationFrame(frame);
-    }
-    const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
-
-    function tick() {
-      clearTimeout(tickTimer);
-      const now = performance.now();
-      const p = source.read();
-      const sec = p.slot, key = p.key;
-      if (sec !== current || key !== minuteKey) {
-        const first = current === -1;
-        const rolled = !first && key !== minuteKey;
-        if (rolled) startOver(now, key);
-        // Every point of this minute so far gets a string; catches up after a sleeping tab too.
-        for (let s = 0; s <= sec; s++) {
-          if (live(s)) continue;
-          const delay = first ? s * 22 : rolled ? 380 + s * 12 : 0;
-          addString(s, now, still() ? 0 : delay, sec - s);
-        }
-        stepTo(first ? sec : steps + ((sec - current + 60) % 60), now, first);
-        current = sec; minuteKey = key;
-        if (!first && !still()) pluck(sec, now + (rolled ? 380 : 0) + GROW_MS * 0.75);
-        if (!first && !rolled) sound.ripple((GROW_MS * 0.75) / 1000);
-        if (!first && sec === 56) sound.spin((60000 - source.msm()) / 1000);   // rim-rub swell into the minute
-        if (rolled && !still()) {
-          if (mm.textContent !== p.b) { mm.classList.remove('roll'); void mm.offsetWidth; mm.classList.add('roll'); }
-          if (hh.textContent !== p.a) { hh.classList.remove('roll'); void hh.offsetWidth; hh.classList.add('roll'); }
-          highlight(p.a, p.b);
-        }
-        hh.textContent = p.a;
-        mm.textContent = p.b;
-        clockEl.setAttribute('aria-label', p.aria);
-        colon.classList.remove('dim');
-        setTimeout(() => colon.classList.add('dim'), 500);
-        paintLabels();
-        kick();
-      }
-      const timing = source === countdown;
-      clockEl.classList.toggle('paused', timing && !timer.running());
-      tickTimer = setTimeout(tick, source.nextTick());
-    }
-
-    // Start the dial over for a new time source or a new session.
-    function restart() {
-      pullIn(performance.now());
-      current = -1; minuteKey = null;
-      relabel();
-      tick();
-    }
-
-    // Pressing the middle rings the bowl and releases a ripple from the centre.
-    bowl.addEventListener('click', () => {
-      sound.bowl();
-      if (!geo) return;
-      const now = performance.now();
-      for (let k = 0; k < 4; k++) addRipple(geo.cx, geo.cy, now + k * 260, 2200, 4, geo.R + 40, true);
-      highlight(hh.textContent, mm.textContent);
-      strings.forEach((st) => {
-        if (st.retractAt !== null) return;
-        st.pluckAt = now + 120 + ((geo.R - geo.rIn) / (geo.R + 40)) * 900 * Math.random();
-        st.pluckAmp = rand(5, 9);
-      });
-      kick();
-    });
-
-    const remeasure = () => { measure(); kick(); };
-    window.addEventListener('resize', remeasure);
-    if ('ResizeObserver' in window) new ResizeObserver(remeasure).observe(stage);   // follows the panel as it widens
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(remeasure);
-    document.addEventListener('visibilitychange', () => { tick(); kick(); });
-    reduceMotion.addEventListener?.('change', kick);
-    if ('IntersectionObserver' in window) {
-      new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) kick(); }).observe(stage);
-    }
-    measure();
-    tick();
-
-    return {
-      restart,
-      setMode(mode) {
-        const next = mode === 'timer' ? countdown : wallClock;
-        if (next === source) return;
-        source = next;
-        stage.classList.toggle('timing', next === countdown);
-        restart();
-      },
-    };
-  })();
+  // Pressing the middle of the clock rings the component's own bowl (it always sounds when pressed).
 
   /* ================= Procedural backgrounds (WebGL) ================= */
   const bg = (() => {
@@ -1095,7 +643,7 @@
     const timing = view === 'timer';
     if (timing !== root.classList.contains('timer')) {
       root.classList.toggle('timer', timing);
-      clock.setMode(timing ? 'timer' : 'clock');
+      if (timing) timer.sync(true); else lcReady.then(() => lc.showClock());
       timer.paint();
       clearTimeout(timerBgTimer);
       if (timing) { timerBgTimer = setTimeout(() => bg.pause(true), 900); window.scrollTo(0, 0); }
