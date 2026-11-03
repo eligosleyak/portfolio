@@ -15,6 +15,7 @@
   --accent: #ff5522;
   --amethyst: #8a4fd6;
   --amethyst-glow: rgba(138, 79, 214, .32);
+  --pink: #ec4899;
   --pass: #1b7f3b;
   --fail: #c62a1f;
 
@@ -35,7 +36,7 @@
     --muted: rgba(250, 248, 245, .56); --faint: rgba(250, 248, 245, .3);
     --line: rgba(250, 248, 245, .13); --wire: rgba(250, 248, 245, .22);
     --pass: #4cc274; --fail: #ff6b5e;
-    --amethyst: #b98cff; --amethyst-glow: rgba(185, 140, 255, .38);
+    --amethyst: #b98cff; --amethyst-glow: rgba(185, 140, 255, .38); --pink: #f472b6;
     color-scheme: dark;
   }
 }
@@ -44,7 +45,7 @@
   --muted: rgba(250, 248, 245, .56); --faint: rgba(250, 248, 245, .3);
   --line: rgba(250, 248, 245, .13); --wire: rgba(250, 248, 245, .22);
   --pass: #4cc274; --fail: #ff6b5e;
-  --amethyst: #b98cff; --amethyst-glow: rgba(185, 140, 255, .38);
+  --amethyst: #b98cff; --amethyst-glow: rgba(185, 140, 255, .38); --pink: #f472b6;
   color-scheme: dark;
 }
 
@@ -117,7 +118,7 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
 .stage { position: relative; min-height: 280px; display: grid; place-items: center; container-type: size; }
 lotus-clock {
   width: min(100cqw, 100cqh); min-width: 0; min-height: 0;
-  --lc-ink: var(--ink); --lc-accent: var(--amethyst); --lc-line: var(--wire);
+  --lc-ink: var(--ink); --lc-accent: var(--amethyst); --lc-line-to: var(--pink);
   --lc-glow: var(--amethyst-glow); --lc-paper-solid: var(--paper);
   --lc-font-display: var(--display); --lc-font-mono: var(--mono);
 }

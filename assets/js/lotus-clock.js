@@ -1,4 +1,4 @@
-/* Vendored from https://github.com/Sagunnn/lotus-clock (v1.3.0). Update by copying a newer release. */
+/* Vendored from https://github.com/Sagunnn/lotus-clock (v1.6.1). Update by copying a newer release. */
 /*!
  * <lotus-clock> — a kinetic clock web component.
  * Straight lines that curl as the minute turns, then fold into a crown lotus.
@@ -6,6 +6,7 @@
  */
 
 const NS = 'http://www.w3.org/2000/svg';
+let gradSeq = 0;   // unique gradient ids, one per clock
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -240,7 +241,13 @@ const bowl = (() => {
 const STYLES = `
 :host {
   --_ink: var(--lc-ink, currentColor);
-  --_line: var(--lc-line, color-mix(in srgb, var(--_ink) 20%, transparent));
+  /* Lines run from amethyst at the hub to pink at the rim (--lc-line sets one solid colour instead). */
+  --_line-from: var(--lc-line-from, var(--lc-line, var(--_accent)));
+  --_line-to: var(--lc-line-to, var(--lc-line, #ec4899));
+  --_line-opacity: var(--lc-line-opacity, .85);
+  /* When the bowl is struck, the lines flash between these two (neon green and red). */
+  --_flash-a: var(--lc-flash-a, #22ff55);
+  --_flash-b: var(--lc-flash-b, #ff2a45);
   --_accent: var(--lc-accent, #8a4fd6);
   --_glow: var(--lc-glow, color-mix(in srgb, var(--_accent) 35%, transparent));
   display: block; position: relative; aspect-ratio: 1 / 1; min-width: 200px; min-height: 200px;
@@ -253,20 +260,46 @@ const STYLES = `
 svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 
 /* Lines / petals. --ring-index (0 inner … 2 outer) and --petal-index (0–19) drive the staggers.
-   From :55 the stroke warms toward the accent with --_inhale. */
+   Everything is painted with radial gradients round the hub (made by script; --_lp, --_pp and --_dp
+   point at them): amethyst at the centre, pink further out. Lines go fully pink by their tips; the
+   lotus runs amethyst on the inner ring to pink on the outer; the hub's rosette has its own.
+   From :55 the lines brighten with --_inhale. */
+.g-line .from { stop-color: var(--_line-from); stop-opacity: min(1, calc(var(--_line-opacity) + var(--_inhale) * .3)); }
+.g-line .to { stop-color: var(--_line-to); stop-opacity: min(1, calc(var(--_line-opacity) + var(--_inhale) * .3)); }
+.g-petal .from, .g-disc .from { stop-color: var(--_line-from); }
+.g-petal .to, .g-disc .to { stop-color: var(--_line-to); }
 .line {
-  fill: var(--_accent); fill-opacity: 0;
-  stroke: color-mix(in srgb, var(--_accent) calc(var(--_inhale) * 60%), var(--_line));
+  fill: var(--_pp, var(--_accent)); fill-opacity: 0;
+  stroke: var(--_lp, var(--_line-from));
   stroke-width: .75; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke;
 }
-.line.formed { stroke: var(--_accent); stroke-opacity: .85; }
-.line.now { stroke: var(--_accent); stroke-opacity: .9; }
+.line.formed { stroke: var(--_pp, var(--_accent)); stroke-opacity: .95; }
+.line.now { stroke: var(--_pp, var(--_accent)); stroke-opacity: 1; }
 /* Radial shockwave: hub → inner → middle → outer ring. */
 .line.shock { animation: lc-shock ${SHOCK_MS}ms cubic-bezier(.2, .7, .2, 1) calc(var(--ring-index) * 65ms); }
 @keyframes lc-shock {
   0% { stroke: var(--_accent); stroke-opacity: 1; stroke-width: 2.6px; }
   35% { stroke-width: 1.4px; }
 }
+/* Struck bowl: the (unformed) lines flicker neon green ↔ red as the wave passes, fading back to
+   their gradient. Petals keep the amethyst shock above. */
+.line.shock:not(.formed):not(.bloom) { animation: lc-flash ${SHOCK_MS}ms linear calc(var(--ring-index) * 65ms); }
+@keyframes lc-flash {
+  /* Each colour holds, then snaps to the other, so it stays vivid (no muddy blend in between). */
+  0% { stroke: var(--_flash-a); stroke-opacity: 1; stroke-width: 2.6px; }
+  12% { stroke: var(--_flash-a); }
+  14% { stroke: var(--_flash-b); }
+  26% { stroke: var(--_flash-b); }
+  28% { stroke: var(--_flash-a); stroke-width: 1.4px; }
+  42% { stroke: var(--_flash-a); }
+  44% { stroke: var(--_flash-b); }
+  60% { stroke: var(--_flash-b); }
+  62% { stroke: var(--_flash-a); }
+  78% { stroke: var(--_flash-a); }
+  80% { stroke: var(--_flash-b); stroke-opacity: .4; }
+  96% { stroke: var(--_flash-b); stroke-opacity: .15; }
+}
+
 /* :00 bloom: petals spring outward from the drawn-in pose and dissolve, staggered round the flower. */
 .line.bloom {
   transform-box: view-box; transform-origin: var(--_cx) var(--_cy);
@@ -289,13 +322,13 @@ text.now { opacity: 1; font-weight: 600; }
 .converge { fill: none; stroke: var(--_accent); stroke-opacity: .75; stroke-width: .9; vector-effect: non-scaling-stroke; opacity: 0; }
 .aura {
   position: absolute; inset: -6%; pointer-events: none; opacity: 0;
-  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--_accent) 34%, transparent) 0%, color-mix(in srgb, var(--_accent) 14%, transparent) 42%, transparent 68%);
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--_line-from) 36%, transparent) 0%, color-mix(in srgb, var(--_line-to) 18%, transparent) 42%, transparent 68%);
 }
 .disc { opacity: 0; }
 .disc .face { fill: var(--lc-paper-solid, Canvas); }
-.disc .tint { fill: var(--_accent); fill-opacity: .12; stroke: var(--_accent); stroke-opacity: .55; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.disc .inner { fill: none; stroke: var(--_accent); stroke-opacity: .4; stroke-width: .75; vector-effect: non-scaling-stroke; }
-.disc .rosette circle { fill: none; stroke: var(--_accent); stroke-opacity: .45; stroke-width: .7; vector-effect: non-scaling-stroke; }
+.disc .tint { fill: var(--_dp, var(--_accent)); fill-opacity: .16; stroke: var(--_dp, var(--_accent)); stroke-opacity: .85; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.disc .inner { fill: none; stroke: var(--_dp, var(--_accent)); stroke-opacity: .65; stroke-width: .9; vector-effect: non-scaling-stroke; }
+.disc .rosette circle { fill: none; stroke: var(--_dp, var(--_accent)); stroke-opacity: .8; stroke-width: .9; vector-effect: non-scaling-stroke; }
 .clock {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   display: flex; align-items: baseline; white-space: nowrap;
@@ -583,6 +616,19 @@ export class LotusClock extends HTMLElement {
 
   _buildSvg() {
     const svg = this._el.svg;
+    // Amethyst-to-pink radial gradients (unique ids per clock), sized round the hub in _measure:
+    // for the lines, the lotus petals and the hub's rosette. If a browser can't resolve one, the
+    // paint falls back to a plain colour.
+    const defs = this._mk('defs', {}, svg), n = ++gradSeq;
+    this._grads = {};
+    [['line', '--_lp', 'var(--_line-from)'], ['petal', '--_pp', 'var(--_accent)'], ['disc', '--_dp', 'var(--_accent)']].forEach(([k, prop, fallback]) => {
+      const id = `lc-${k}-${n}`;
+      const el = this._mk('radialGradient', { id, class: `grad g-${k}`, gradientUnits: 'userSpaceOnUse' }, defs);
+      const from = this._mk('stop', { class: 'from', offset: '0' }, el);
+      this._mk('stop', { class: 'to', offset: '1' }, el);
+      this._grads[k] = { el, from };
+      this._el.stage.style.setProperty(prop, `url(#${id}) ${fallback}`);
+    });
     this._gLabels = this._mk('g', { class: 'labels' }, svg);
     // Lines in three ring groups, outer ring first so inner petals sit on top.
     this._gLines = this._mk('g', { class: 'lines' }, svg);
@@ -616,6 +662,17 @@ export class LotusClock extends HTMLElement {
     const R = Math.max(50, size / 2 - (showLabels ? 26 : 8));
     const rIn = Math.min(R - 20, k.width / 2 + 16);
     this._geo = { cx, cy, R, rIn, sparse: (TAU * R) / 60 < 22 };
+    // Gradients: lines amethyst from the hub's edge and fully pink by ~70% of the way out (they
+    // curl back before the dial, so that is where their tips sit); petals across the whole lotus
+    // (inner ring amethyst, outer ring pink); the rosette around its own centre (the disc group is
+    // drawn around 0, 0).
+    const sizeGrad = ({ el, from }, x, y, r, inner) => {
+      el.setAttribute('cx', x.toFixed(1)); el.setAttribute('cy', y.toFixed(1)); el.setAttribute('r', r.toFixed(1));
+      from.setAttribute('offset', Math.min(0.6, inner / r).toFixed(3));
+    };
+    sizeGrad(this._grads.line, cx, cy, R * 0.7, rIn);
+    sizeGrad(this._grads.petal, cx, cy, R, rIn);
+    sizeGrad(this._grads.disc, 0, 0, rIn, rIn * 0.15);
     this._el.svg.setAttribute('viewBox', `0 0 ${host.width} ${host.height}`);
     this._el.stage.style.setProperty('--_cx', `${cx.toFixed(1)}px`);
     this._el.stage.style.setProperty('--_cy', `${cy.toFixed(1)}px`);
