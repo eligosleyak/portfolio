@@ -481,6 +481,9 @@
       cluster.setAttribute('aria-activedescendant', titleEls[i].id);
       live.textContent = `${it.title}, ${it.cat}, ${it.year}`;
       bg.set(it.colors, i * 1.37 + 0.4);
+      // The clock takes the project's colours too (mid → bright), gliding over with the background.
+      lc.style.setProperty('--proj-a', it.colors[1]);
+      lc.style.setProperty('--proj-b', it.colors[2]);
     }
 
     function loop(now) {
