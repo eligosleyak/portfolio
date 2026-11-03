@@ -123,16 +123,22 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
 .wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; color: var(--ink); pointer-events: none; }
 /* Lotus drawn in lines: each line is half a petal's outline. */
 .wires .petal {
-  fill: none; stroke: var(--wire); stroke-width: .75; stroke-linejoin: round; stroke-linecap: round;
+  fill: var(--amethyst); fill-opacity: 0; stroke: var(--wire); stroke-width: .75; stroke-linejoin: round; stroke-linecap: round;
   vector-effect: non-scaling-stroke; transition: stroke .4s var(--ease);
 }
 .wires .petal.now { stroke: var(--amethyst); stroke-opacity: .9; }
 /* The filled amethyst lotus seen during the final turn of each minute. */
-.wires .lotus { opacity: 0; }
-.wires .lotus path { fill: var(--amethyst); stroke: var(--amethyst); stroke-opacity: .5; stroke-width: .75; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
-.wires .lotus .r0 path { fill-opacity: .13; }
-.wires .lotus .r1 path { fill-opacity: .2; }
-.wires .lotus .r2 path { fill-opacity: .3; }
+/* Crown lotus in the final turn: each line becomes a filled petal; a disc, rosette and glow at the centre. */
+.wires .petal.formed { stroke: var(--amethyst); stroke-opacity: .85; }
+.aura {
+  position: absolute; inset: -6%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--amethyst) 34%, transparent) 0%, color-mix(in srgb, var(--amethyst) 14%, transparent) 42%, transparent 68%);
+}
+.wires .disc { opacity: 0; }
+.wires .disc .face { fill: var(--paper); }
+.wires .disc .tint { fill: var(--amethyst); fill-opacity: .12; stroke: var(--amethyst); stroke-opacity: .55; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.wires .disc .inner { fill: none; stroke: var(--amethyst); stroke-opacity: .4; stroke-width: .75; vector-effect: non-scaling-stroke; }
+.wires .disc .rosette circle { fill: none; stroke: var(--amethyst); stroke-opacity: .45; stroke-width: .7; vector-effect: non-scaling-stroke; }
 .wires text {
   font-family: var(--mono); font-size: 10px; letter-spacing: .04em; font-variant-numeric: tabular-nums;
   fill: currentColor; text-anchor: middle; dominant-baseline: central;
