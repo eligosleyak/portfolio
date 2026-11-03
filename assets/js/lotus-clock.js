@@ -1,4 +1,4 @@
-/* Vendored from https://github.com/Sagunnn/lotus-clock (v1.2.0). Update by copying a newer release. */
+/* Vendored from https://github.com/Sagunnn/lotus-clock (v1.3.0). Update by copying a newer release. */
 /*!
  * <lotus-clock> — a kinetic clock web component.
  * Straight lines that curl as the minute turns, then fold into a crown lotus.
@@ -36,6 +36,7 @@ const SAMPLES = 40;
 // In the final turn every line folds into its own lotus petal, pointing at its second.
 // Line s joins ring s % 3 (0 inner … 2 outer), so 60 lines make three rings of 20 petals.
 // Values are shares of the space between the digits and the dial.
+const SYLLABLES = ['Om', 'Ma', 'Ni', 'Pad', 'Me', 'Hum'];   // a name for each second (sec % 6), for host UIs
 const RINGS = 3;
 const RING_BASE = [-0.02, 0.17, 0.36];
 const RING_LEN = [0.46, 0.52, 0.64];
@@ -43,7 +44,7 @@ const RING_FILL = [0.55, 0.4, 0.28];
 const petalShape = (v) => Math.pow(Math.sin(Math.PI * v), 0.8) * (1 - 0.38 * v) * 1.25;   // onion dome
 
 /* ---------------------------------------------------------------------------
- * Sound: a physically-inspired Tibetan singing bowl and a softly intoned mantra,
+ * Sound: a physically-inspired Tibetan singing bowl and a 136.1 Hz "Om" drone,
  * shared by every clock.
  * Web Audio only, no files. Browsers need a user gesture before audio can play,
  * so the context is created on the first click/keypress after sound is wanted.
@@ -58,24 +59,19 @@ const bowl = (() => {
     { ratio: 2.756, beat: 2.8, decay: 5.5, gain: 0.42 },
     { ratio: 5.404, beat: 4.2, decay: 2.2, gain: 0.2 },
   ];
-  // "Om · Ma · Ni · Pad · Me · Hum": one syllable per second, so the mantra cycles 10 times a
-  // minute. Each has a pitch on a calm contour round ROOT, a length, and two formants (F1, F2)
-  // that glide from `from` to `to` to colour the vowel. `glide` = share of the syllable spent gliding.
-  const MANTRA = [
-    { name: 'Om',  f: 216, dur: 0.65, from: [450, 800],  to: [280, 900],   glide: 0.75, attack: 0.12 },  // open O → closed nasal M
-    { name: 'Ma',  f: 243, dur: 0.42, from: [280, 900],  to: [720, 1150],  glide: 0.18, attack: 0.05 },  // nasal onset → open Ah
-    { name: 'Ni',  f: 270, dur: 0.42, from: [320, 1900], to: [300, 2150],  glide: 0.25, attack: 0.05 },  // bright front Ee
-    { name: 'Pad', f: 243, dur: 0.40, from: [600, 1050], to: [620, 1100],  glide: 0.3,  attack: 0.008, plosive: true },
-    { name: 'Me',  f: 216, dur: 0.45, from: [300, 1600], to: [460, 1850],  glide: 0.25, attack: 0.05 },  // Eh / Ay
-    { name: 'Hum', f: 162, dur: 0.80, from: [350, 750],  to: [260, 850],   glide: 0.7,  attack: 0.1 },   // Oo → deep closed M
-  ];
-  let ctx = null, bus = null, noise = null, armed = false, drone = null;
+  // The ambient drone while `sound` is on: a 136.1 Hz sine (the "Om" tone) with a quiet
+  // 528 Hz sine layer at 5% of its level. Pure tones, straight to the output.
+  const OM_HZ = 136.1, HEART_HZ = 528, HEART_MIX = 0.05;
+  const OM_LEVEL = 0.12;   // under the bowl strikes (which peak ~0.22); raise toward 0.3 for more presence
+  let ctx = null, bus = null, out = null, noise = null, armed = false, drone = null;
+  let omWanted = 0, om = null;   // how many clocks want the drone; the playing drone, if any
 
   function init() {
     if (ctx) return true;
     if (!AC) return false;
     ctx = new AC();
     const master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
+    out = master;
     const warm = ctx.createBiquadFilter(); warm.type = 'lowpass'; warm.frequency.value = 2400; warm.Q.value = 0.4;
     // A quiet room: ~3 s of decaying stereo noise as the impulse response, plus a faint echo.
     const len = Math.floor(ctx.sampleRate * 3), ir = ctx.createBuffer(2, len, ctx.sampleRate);
@@ -104,7 +100,7 @@ const bowl = (() => {
   function arm() {
     if (armed || typeof window === 'undefined') return;
     armed = true;
-    const unlock = () => { if (init()) ctx.resume(); };
+    const unlock = () => { if (init()) { ctx.resume(); omUpdate(); } };
     window.addEventListener('pointerdown', unlock, { capture: true });
     window.addEventListener('keydown', unlock, { capture: true });
   }
@@ -164,68 +160,36 @@ const bowl = (() => {
     });
   }
 
-  // One mantra syllable: a soft sine bell at the syllable's pitch, plus a quiet sub-octave
-  // sawtooth "voice" shaped by two parallel band-pass formant filters that glide through the
-  // vowel. Tiny random variations in pitch, level and length keep it from sounding mechanical.
-  function mantra(step, delay = 0) {
-    if (!ok()) return;
-    const sy = MANTRA[((step % 6) + 6) % 6];
-    const t = ctx.currentTime + delay + 0.01;
-    const vary = (x, amt) => x * (1 + (Math.random() - 0.5) * amt);
-    const dur = vary(sy.dur, 0.08), peak = vary(0.045, 0.12), f = vary(sy.f, 0.004);
-    const end = t + dur;
-    const nodes = [];
-    const keep = (n) => { nodes.push(n); return n; };
-
-    // Syllable envelope for the voice.
-    const voice = keep(ctx.createGain());
-    voice.gain.setValueAtTime(0.0001, t);
-    voice.gain.linearRampToValueAtTime(peak, t + sy.attack);
-    voice.gain.setValueAtTime(peak, Math.max(t + sy.attack, end - dur * 0.45));
-    voice.gain.exponentialRampToValueAtTime(0.0001, end);
-    voice.connect(bus);
-
-    // Glottal source an octave down: rich in harmonics for the formants to pick from.
-    const src = keep(ctx.createOscillator());
-    src.type = 'sawtooth';
-    src.frequency.setValueAtTime(f / 2, t);
-    src.frequency.exponentialRampToValueAtTime((f / 2) * 0.994, end);   // a breath of downward drift
-    const drive = keep(ctx.createGain()); drive.gain.value = 1;
-    src.connect(drive);
-    [[0, 7, 2.2], [1, 8.5, 1.3]].forEach(([k, q, gain]) => {
-      const bp = keep(ctx.createBiquadFilter());
-      bp.type = 'bandpass'; bp.Q.value = q;
-      bp.frequency.setValueAtTime(sy.from[k], t);
-      bp.frequency.exponentialRampToValueAtTime(sy.to[k], t + Math.max(0.02, dur * sy.glide));
-      const g = keep(ctx.createGain()); g.gain.value = gain;
-      drive.connect(bp).connect(g).connect(voice);
-    });
-    src.start(t); src.stop(end + 0.05);
-
-    // Soft bell at the syllable's pitch, with a hint of the bowl's first overtone.
-    [[1, 0.8, 1.8], [2.756, 0.12, 0.9]].forEach(([ratio, lvl, len]) => {
-      const o = keep(ctx.createOscillator()), g = keep(ctx.createGain());
-      o.type = 'sine'; o.frequency.value = f * ratio;
+  // Start or stop the shared drone to match whether any clock wants it. Fades in over ~2 s and
+  // out over ~1 s so it never clicks; its oscillators are stopped and released once silent.
+  function omUpdate() {
+    if (!ok() || !out) return;
+    const t = ctx.currentTime;
+    if (omWanted > 0 && !om) {
+      const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(peak * lvl, t + 0.012);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur * len);
-      o.connect(g).connect(bus);
-      o.start(t); o.stop(t + dur * len + 0.05);
-    });
-
-    // "Pad": a soft lip plosive, 8 ms of low-passed noise.
-    if (sy.plosive) {
-      const n = keep(ctx.createBufferSource()), lp = keep(ctx.createBiquadFilter()), g = keep(ctx.createGain());
-      n.buffer = noise;
-      lp.type = 'lowpass'; lp.frequency.value = 900;
-      g.gain.setValueAtTime(peak * 0.9, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.008);
-      n.connect(lp).connect(g).connect(bus);
-      n.start(t, Math.random()); n.stop(t + 0.012);
+      g.gain.setTargetAtTime(OM_LEVEL, t, 0.7);
+      g.connect(out);
+      const drone136 = ctx.createOscillator();
+      drone136.type = 'sine'; drone136.frequency.setValueAtTime(OM_HZ, t);
+      drone136.connect(g);
+      const heart = ctx.createOscillator(), heartGain = ctx.createGain();
+      heart.type = 'sine'; heart.frequency.setValueAtTime(HEART_HZ, t);
+      heartGain.gain.setValueAtTime(HEART_MIX, t);
+      heart.connect(heartGain).connect(g);
+      drone136.start(t); heart.start(t);
+      om = { g, oscs: [drone136, heart], heartGain };
+    } else if (omWanted === 0 && om) {
+      const o = om; om = null;
+      o.g.gain.cancelScheduledValues(t);
+      o.g.gain.setTargetAtTime(0.0001, t, 0.3);
+      o.oscs.forEach((osc) => osc.stop(t + 1.6));
+      o.oscs[0].onended = () => { o.oscs.forEach((osc) => osc.disconnect()); o.heartGain.disconnect(); o.g.disconnect(); };
     }
-
-    // Tidy up once the longest voice (the bell) has finished.
-    setTimeout(() => nodes.forEach((n) => n.disconnect()), (delay + dur * 1.8 + 0.3) * 1000);
+  }
+  function omWant(on) {
+    omWanted = Math.max(0, omWanted + (on ? 1 : -1));
+    omUpdate();
   }
 
   // Rim-rubbing drone: a sustained 1.0 + 2.756 beating pair whose level and brightness follow
@@ -264,10 +228,9 @@ const bowl = (() => {
   }
 
   return {
-    ROOT, arm, strike, sing, mantra, droneLevel,
-    SYLLABLES: MANTRA.map((m) => m.name),
+    ROOT, arm, strike, sing, droneLevel, omWant,
     // A deliberate press can start audio itself (it is a gesture).
-    wake() { if (init()) ctx.resume(); },
+    wake() { if (init()) { ctx.resume(); omUpdate(); } },
   };
 })();
 
@@ -507,6 +470,7 @@ export class LotusClock extends HTMLElement {
   connectedCallback() {
     this._makeFormatter();
     if (this.hasAttribute('sound')) bowl.arm();
+    this._syncDrone();
     if (this.hasAttribute('countdown') && this._mode !== 'countdown') {
       this.countdown(this.getAttribute('countdown'), { autostart: this.hasAttribute('autostart') });
     }
@@ -531,17 +495,32 @@ export class LotusClock extends HTMLElement {
     this._io && this._io.disconnect();
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this._rub.level > 0) { this._rub.level = 0; bowl.droneLevel(0, 0); }
+    this._syncDrone(false);
   }
 
   attributeChangedCallback(name, oldV, newV) {
     if (oldV === newV || !this._el) return;
     if (name === 'time-zone' || name === 'hour12') { this._makeFormatter(); if (this._mode === 'clock' && this.isConnected) this._restart(); }
     else if (name === 'labels') this._paintLabels();
-    else if (name === 'sound') { if (newV !== null) bowl.arm(); else bowl.droneLevel(0, 0); }
+    else if (name === 'sound') {
+      if (newV !== null) {
+        bowl.arm();
+        // Turned on from a click or key press (e.g. a SOUND button): start audio right away.
+        if (navigator.userActivation?.isActive ?? true) bowl.wake();
+      }
+      this._syncDrone();
+    }
     else if (name === 'countdown' && this.isConnected) {
       if (newV === null) this.showClock();
       else this.countdown(newV, { autostart: this.hasAttribute('autostart') });
     }
+  }
+
+  // The ambient 136.1 Hz drone plays while this clock is on the page with `sound` on.
+  _syncDrone(want = this.isConnected && this.hasAttribute('sound')) {
+    if (want === !!this._droneOn) return;
+    this._droneOn = want;
+    bowl.omWant(want);
   }
 
   /* ----- internals: time sources ---------------------------------------- */
@@ -1032,7 +1011,6 @@ export class LotusClock extends HTMLElement {
       this._current = sec; this._minuteKey = key;
       const sound = this.hasAttribute('sound');
       if (!first && this._geo && !this._still()) this._pluck(sec, now + (rolled ? 380 : 0) + GROW_MS * 0.75);
-      if (!first && sound) bowl.mantra(sec % 6, (GROW_MS * 0.75) / 1000);   // Om · Ma · Ni · Pad · Me · Hum
       if (!first && sec === 56 && sound && this.getAttribute('finale') !== 'off') bowl.sing(bowl.ROOT, 0.05, Math.max(0.5, (60000 - this._msm()) / 1000), 3.5);
       if (rolled && !this._still() && this.getAttribute('finale') !== 'off') {
         if (mm.textContent !== p.b) { mm.classList.remove('roll'); void mm.offsetWidth; mm.classList.add('roll'); }
@@ -1045,7 +1023,7 @@ export class LotusClock extends HTMLElement {
       colon.classList.remove('dim');
       setTimeout(() => colon.classList.add('dim'), 500);
       this._paintLabels();
-      if (!first) this._emit('second', { value: p, syllable: bowl.SYLLABLES[sec % 6] });
+      if (!first) this._emit('second', { value: p, syllable: SYLLABLES[sec % 6] });
       this._kick();
     }
     const counting = this._mode === 'countdown';
