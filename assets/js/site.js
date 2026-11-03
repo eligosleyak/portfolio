@@ -289,14 +289,16 @@
     };
   })();
 
-  /* ================= Kinetic clock: strings of time =================
+  /* ================= Kinetic clock: a lotus of time =================
      The dial has 60 points. In clock mode they are the seconds of the
      current minute in Kathmandu; in timer mode they are the countdown's
-     seconds. As each one arrives, a string shoots out from the digits to
-     its point and stays; its waves keep travelling outward.
-     Finale of every minute: from :56 the whole dial makes one full turn,
-     amethyst rings close in, and at :00 a ripple of light runs through
-     the digits. Then the strings are pulled in and it starts over. */
+     seconds. Each second a line grows from the centre of the time out to
+     one fixed spot on the dial, and the whole dial steps one place round,
+     so older lines and numbers move on and the newest always lands on the
+     same spot. Neighbouring lines bow opposite ways and cross into a lotus;
+     over a minute the dial turns one full circle.
+     At the end of each minute amethyst rings close in, a ripple of light
+     runs through the digits, and the lines draw back into the centre. */
   clock = (() => {
     const stage = $('#stage'), svg = $('#wires');
     const hh = $('#hh'), mm = $('#mm'), colon = $('#colon'), clockEl = $('#clock'), glow = $('#clockGlow'), bowl = $('#bowl');
@@ -343,17 +345,32 @@
     const gArc = mk('g', { class: 'progress' }, svg);
     const track = mk('circle', { class: 'track' }, gArc);
     const arc = mk('circle', { class: 'arc' }, gArc);
+    // A filled amethyst lotus that blooms behind the lines during the final turn of each minute.
+    // Three rings of eight petals; inner rings are shorter, deeper and turn a little faster.
+    const gLotus = mk('g', { class: 'lotus' }, svg);
+    const lotusRings = [
+      { n: 8, len: 0.98, w: 0.42, off: 0 },
+      { n: 8, len: 0.74, w: 0.46, off: Math.PI / 8 },
+      { n: 8, len: 0.5, w: 0.5, off: 0 },
+    ].map((ring, i) => Object.assign(ring, { g: mk('g', { class: `lotus-ring r${i}` }, gLotus) }));
+    // Line layer.
     const gStrings = mk('g', { class: 'strings' }, svg);
+    const layers = [0, 1, 2].map((i) => mk('g', { class: `layer l${i}` }, gStrings));
     const gRipples = mk('g', { class: 'ripples' }, svg);
     const converge = [0, 1, 2].map(() => mk('circle', { class: 'converge' }, gRipples));
     const labels = Array.from({ length: 60 }, () => mk('text', {}, gRing));
     const relabel = () => labels.forEach((t, k) => { t.textContent = source.label(k); });
     relabel();
 
-    const SAMPLES = 40, GROW_MS = 700, RETRACT_MS = 700, GLOW_MS = 1700;
+    const GROW_MS = 800, RETRACT_MS = 750, GLOW_MS = 1700, SAMPLES = 40;
+    const LAG_K = 250;                                // extra trail while moving: lag (rad) per rad/ms of spin
+    const TWIST_K = 0.26;                             // twist a line keeps per radian the dial has turned since it arrived
     const SPIN_FROM = 56000, CONVERGE_FROM = 58200;   // ms into the minute
     const TAU = Math.PI * 2;
-    const angle = (s) => -Math.PI / 2 + s * (Math.PI / 30);
+    const STEP = -TAU / 60, STEP_MS = 650;            // the dial steps one place per second (counterclockwise)
+    // The newest second lands just below the right-hand side; older ones travel
+    // counterclockwise, up and over the top, as the dial steps round.
+    const angle = (s) => 0.14 + s * (Math.PI / 30);
     const rand = (a, b) => a + Math.random() * (b - a);
     const ease = (t) => 1 - Math.pow(1 - t, 3);
     const inOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -362,6 +379,16 @@
 
     let geo = null, strings = [], ripples = [], current = -1, minuteKey = null, raf = 0, onScreen = true;
     let rot = 0, placedRot = null, glowAt = -1, tickTimer = 0;
+    // Each second the whole dial steps one place so the newest second always lands on the
+    // same spot (where 00 is drawn). steps counts up forever, so 59 → 00 keeps turning forward.
+    let steps = 0, rotFrom = 0, rotTo = 0, rotAt = 0, rotStep = 0, rolledAt = -1e9;
+    let angVel = 0, lastRot = 0, lastFrame = 0;
+    function stepTo(n, now, instant) {
+      steps = n;
+      rotFrom = instant ? n * STEP : rotStep;
+      rotTo = n * STEP;
+      rotAt = now;
+    }
 
     const live = (s) => strings.some((st) => st.s === s && st.retractAt === null);
 
@@ -378,6 +405,20 @@
       [track, arc].forEach((c) => { c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', ar); });
       arc.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
       geo.arcLen = TAU * ar;
+      // Lotus petals, drawn around (0, 0); each ring group is moved and turned in frame().
+      const b0 = R * 0.05;
+      lotusRings.forEach((ring) => {
+        while (ring.g.firstChild) ring.g.firstChild.remove();
+        const L = R * ring.len, w = (L * ring.w) / 2;
+        for (let k = 0; k < ring.n; k++) {
+          const a = ring.off + (k * TAU) / ring.n, ca = Math.cos(a), sa = Math.sin(a);
+          const P = (x, y) => `${(ca * (b0 + x) - sa * y).toFixed(1)},${(sa * (b0 + x) + ca * y).toFixed(1)}`;
+          mk('path', {
+            d: `M${P(0, -w * 0.12)}C${P(L * 0.3, -w * 1.3)} ${P(L * 0.84, -w * 0.85)} ${P(L, 0)}` +
+               `C${P(L * 0.84, w * 0.85)} ${P(L * 0.3, w * 1.3)} ${P(0, w * 0.12)}Z`,
+          }, ring.g);
+        }
+      });
       placedRot = null;
       placeLabels();
       paintLabels();
@@ -402,17 +443,28 @@
       });
     }
 
-    function addString(s, now, delay) {
+    // Every line arrives straight, from the centre of the time out to its second. Its shape comes
+    // from the dial turning: each step leaves a little twist behind, so older lines curve more.
+    // Neighbours twist by different amounts, so over the minute their curves cross into a
+    // lotus, and the fast final turn tangles them. `age` = seconds already passed (on load).
+    function addString(s, now, delay, age = 0) {
+      const drag = s % 2 ? rand(1.05, 1.5) : rand(0.5, 0.95);
       strings.push({
-        s, th: angle(s),
-        A: rand(1.2, 4.5),                                   // resting wave height (px)
-        f: rand(0.8, 3.4),                                   // waves along the string
-        w: rand(1.1, 3.2),                                   // outward travel speed
+        s, th: angle(s), drag,
+        twist: age * Math.abs(STEP) * TWIST_K * drag,        // builds up as the dial turns: the line slowly curves
+        A: 0,                                                // straight at rest; ripples still make it tremble
+        f: rand(1, 2.4),                                     // waves along the line
+        w: rand(1.2, 2.8),                                   // outward travel speed
         phi: rand(0, TAU),
-        born: now + delay, pluckAt: now + delay + GROW_MS * 0.75, pluckAmp: rand(7, 13),
+        born: now + delay, pluckAt: now + delay + GROW_MS * 0.75, pluckAmp: rand(5, 9),
         retractAt: null,
-        path: mk('path', {}, gStrings),
+        path: mk('path', { class: 'petal' }, layers[0]),
       });
+    }
+
+    function tipOf(s) {
+      const th = angle(s) + rot;
+      return [geo.cx + Math.cos(th) * geo.R, geo.cy + Math.sin(th) * geo.R];
     }
 
     function addRipple(x, y, t0, dur, r0, r1, big) {
@@ -420,8 +472,7 @@
     }
 
     function pluck(s, now) {
-      const th = angle(s) + rot;
-      const x = geo.cx + Math.cos(th) * geo.R, y = geo.cy + Math.sin(th) * geo.R;
+      const [x, y] = tipOf(s);                                // where the new line lands (and joins its pair)
       addRipple(x, y, now, 1100, 0, 30, false);
       addRipple(x, y, now + 160, 1100, 0, 18, false);
       strings.forEach((st) => {
@@ -447,6 +498,7 @@
     }
 
     function startOver(now, key) {
+      rolledAt = now;
       pullIn(now);
       if (geo) for (let k = 0; k < 3; k++) addRipple(geo.cx, geo.cy, now + k * 200, 1500, geo.rIn, geo.R + 30, true);
       source.onRoll(key);
@@ -459,41 +511,73 @@
       const { cx, cy, R, rIn } = geo;
       const msm = source.msm();
 
-      // One full turn of the dial, easing in and out, landing exactly on :00.
-      const sp = still() ? 0 : clamp((msm - SPIN_FROM) / (60000 - SPIN_FROM), 0, 1);
-      rot = TAU * inOut(sp);
-      const whip = sp > 0 && sp < 1 ? (sp < 0.5 ? 12 * sp * sp : 12 * (1 - sp) * (1 - sp)) / 3 : 0;  // 0..1, peaks mid-turn
+      // Step the dial round: the newest second glides onto the fixed spot.
+      const sp = still() ? 1 : clamp((now - rotAt) / STEP_MS, 0, 1);
+      rotStep = rotFrom + (rotTo - rotFrom) * inOut(sp);
+      // Then, in the last seconds of the minute, one full extra turn (same direction), landing on :00.
+      const turn = still() ? 0 : clamp((msm - SPIN_FROM) / (60000 - SPIN_FROM), 0, 1);
+      const spin = -TAU * inOut(turn);
+      rot = rotStep + spin;
+      // How fast the dial is turning (rad/ms, smoothed). Lines trail behind in proportion.
+      let dr = 0;
+      if (!still() && lastFrame) {
+        dr = rot - lastRot;
+        dr -= TAU * Math.round(dr / TAU);                   // the minute reset is a whole turn: ignore it
+        const v = clamp(dr / Math.max(1, now - lastFrame), -0.008, 0.008);
+        angVel += (v - angVel) * 0.3;
+      } else angVel = 0;
+      lastRot = rot; lastFrame = now;
+
+      // The amethyst lotus: opens through the turn, then swells a touch and fades as the minute changes.
+      let lv = 0, ls = 1;
+      if (!still()) {
+        if (turn > 0) { lv = smoothstep(Math.min(1, turn * 1.5)); ls = 0.3 + 0.7 * ease(turn); }
+        else if (now - rolledAt < 1300) { const f = (now - rolledAt) / 1300; lv = 1 - smoothstep(f); ls = 1 + 0.1 * ease(f); }
+      }
+      gLotus.style.opacity = lv.toFixed(3);
+      if (lv > 0.001) {
+        lotusRings.forEach((ring, i) => {
+          // Extra turn per ring is a multiple of 45°, so the 8-fold lotus never jumps when the minute resets.
+          const deg = ((rot + (spin * i) / 8) * 180) / Math.PI;
+          ring.g.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)}) rotate(${deg.toFixed(2)}) scale(${ls.toFixed(3)})`);
+        });
+      }
       placeLabels();
 
       strings = strings.filter((st) => {
-        let u0 = 0;
+        // How far along its edge the line is drawn: it grows out from the centre to the tip,
+        // and at the end of the minute it draws back into the centre.
+        let end = 1;
         if (st.retractAt !== null) {
           const r = still() ? 1 : clamp((now - st.retractAt) / RETRACT_MS, 0, 1);
           if (r >= 1) { st.path.remove(); return false; }
-          u0 = ease(r);                                       // outer end slides into the clock
+          end = 1 - ease(r);
         }
-        if (!still()) u0 = Math.max(u0, 1 - ease(clamp((now - st.born) / GROW_MS, 0, 1)));
-        if (1 - u0 < 0.002) { st.path.setAttribute('d', ''); return true; }
+        if (!still()) end = Math.min(end, ease(clamp((now - st.born) / GROW_MS, 0, 1)));
+        if (end < 0.005) { st.path.setAttribute('d', ''); return true; }
 
         const th = st.th + rot;
-        const c = Math.cos(th), sn = Math.sin(th);
-        const P = [cx + c * R, cy + sn * R];                  // on the dial
-        const Q = [cx + c * rIn, cy + sn * rIn];              // on the clear circle round the digits
-        const L = R - rIn;
-        const nx = -sn, ny = c;                               // tangent, used for the swirl and the wave
-        const swirl = 0.22 + whip * 0.25;                     // strings trail a little more while spinning
-        const M = [(P[0] + Q[0]) / 2 + nx * L * swirl, (P[1] + Q[1]) / 2 + ny * L * swirl];
+        const dx = Math.cos(th), dy = Math.sin(th), nx = -dy, ny = dx;
+        // Every bit the dial turns leaves a bit of twist in the line (it never springs back),
+        // plus a little extra trail while it's moving. Counterclockwise turning → clockwise trail.
+        st.twist -= dr * TWIST_K * st.drag;
+        const trail = st.twist - angVel * LAG_K * st.drag;
         const pl = !still() && now >= st.pluckAt ? st.pluckAmp * Math.exp(-(now - st.pluckAt) / 480) : 0;
-        const A = st.A + pl + whip * 3;
+        const A = st.A + pl;
 
         let d = '';
         for (let i = 0; i <= SAMPLES; i++) {
-          const u = u0 + (1 - u0) * (i / SAMPLES);
-          const a = (1 - u) * (1 - u), b = 2 * u * (1 - u), q = u * u;
-          const off = A * Math.sin(2 * Math.PI * st.f * u + st.w * t + st.phi) * Math.sin(Math.PI * u);
-          const x = a * P[0] + b * M[0] + q * Q[0] + nx * off;
-          const y = a * P[1] + b * M[1] + q * Q[1] + ny * off;
-          d += `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+          const u = end * (i / SAMPLES);
+          const x = R * u;
+          // Straight line; ripples add a brief tremble that travels outward (both ends stay put).
+          const y = A ? A * Math.sin(2 * Math.PI * st.f * u - st.w * t + st.phi) * Math.sin(Math.PI * u) : 0;
+          let px = dx * x + nx * y, py = dy * x + ny * y;
+          if (Math.abs(trail) > 0.0005) {
+            const lag = trail * (1 - u) ** 1.3;               // the inner part trails the motion the most
+            const cl = Math.cos(lag), sl = Math.sin(lag);
+            [px, py] = [px * cl - py * sl, px * sl + py * cl];
+          }
+          d += `${i ? 'L' : 'M'}${(cx + px).toFixed(1)},${(cy + py).toFixed(1)}`;
         }
         st.path.setAttribute('d', d);
         st.path.classList.toggle('now', st.s === current && st.retractAt === null);
@@ -560,12 +644,13 @@
         for (let s = 0; s <= sec; s++) {
           if (live(s)) continue;
           const delay = first ? s * 22 : rolled ? 380 + s * 12 : 0;
-          addString(s, now, still() ? 0 : delay);
+          addString(s, now, still() ? 0 : delay, sec - s);
         }
+        stepTo(first ? sec : steps + ((sec - current + 60) % 60), now, first);
         current = sec; minuteKey = key;
         if (!first && !still()) pluck(sec, now + (rolled ? 380 : 0) + GROW_MS * 0.75);
         if (!first && !rolled) sound.ripple((GROW_MS * 0.75) / 1000);
-        if (!first && sec === 56) sound.spin((60000 - source.msm()) / 1000);
+        if (!first && sec === 56) sound.spin((60000 - source.msm()) / 1000);   // rim-rub swell into the minute
         if (rolled && !still()) {
           if (mm.textContent !== p.b) { mm.classList.remove('roll'); void mm.offsetWidth; mm.classList.add('roll'); }
           if (hh.textContent !== p.a) { hh.classList.remove('roll'); void hh.offsetWidth; hh.classList.add('roll'); }

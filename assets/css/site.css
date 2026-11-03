@@ -121,8 +121,18 @@ button { font: inherit; color: inherit; letter-spacing: inherit; text-transform:
 .clock.paused { opacity: .5; }
 .stage { position: relative; min-height: 280px; }
 .wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; color: var(--ink); pointer-events: none; }
-.wires .strings path { fill: none; stroke: var(--wire); stroke-width: .75; vector-effect: non-scaling-stroke; stroke-linecap: round; }
-.wires .strings path.now { stroke: var(--ink); stroke-opacity: .6; }
+/* Lotus drawn in lines: each line is half a petal's outline. */
+.wires .petal {
+  fill: none; stroke: var(--wire); stroke-width: .75; stroke-linejoin: round; stroke-linecap: round;
+  vector-effect: non-scaling-stroke; transition: stroke .4s var(--ease);
+}
+.wires .petal.now { stroke: var(--amethyst); stroke-opacity: .9; }
+/* The filled amethyst lotus seen during the final turn of each minute. */
+.wires .lotus { opacity: 0; }
+.wires .lotus path { fill: var(--amethyst); stroke: var(--amethyst); stroke-opacity: .5; stroke-width: .75; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.wires .lotus .r0 path { fill-opacity: .13; }
+.wires .lotus .r1 path { fill-opacity: .2; }
+.wires .lotus .r2 path { fill-opacity: .3; }
 .wires text {
   font-family: var(--mono); font-size: 10px; letter-spacing: .04em; font-variant-numeric: tabular-nums;
   fill: currentColor; text-anchor: middle; dominant-baseline: central;
