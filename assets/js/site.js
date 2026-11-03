@@ -9,45 +9,150 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
   };
 
-  /* ================= Sound (Web Audio, off by default) ================= */
+  /* ================= Sound: a synthesised Tibetan singing bowl =================
+     Everything is generated with Web Audio (no audio files):
+     - strike(): fundamental + a partner 1.8 Hz above (slow beating) + two
+       inharmonic bronze partials (x2.71, x4.83) that fade twice as fast.
+     - sing():   a breathy rim-rub swell, used for the project wheel and the
+       final turn of each minute.
+     - drop():   a soft water-drop for each second's ripple.
+     All of it runs through a warm low-pass, a small generated room reverb and
+     a faint echo. Ambient sound is off until SOUND is pressed. */
   const sound = (() => {
-    let ctx = null, noise = null, on = false;
+    const AC = window.AudioContext || window.webkitAudioContext;
     const btn = $('#sound'), state = $('#soundState');
+    const ROOT = 216;
+    const PENTA = [216, 243, 273, 324, 364];
+    let ctx = null, master = null, bus = null, noiseBuf = null, on = false, offTimer = 0;
 
     function init() {
-      const AC = window.AudioContext || window.webkitAudioContext;
+      if (ctx) return true;
       if (!AC) return false;
       ctx = new AC();
-      // A short burst of decaying noise, band-passed per sound: reads as a mechanical click.
-      const len = Math.floor(ctx.sampleRate * 0.04);
-      noise = ctx.createBuffer(1, len, ctx.sampleRate);
-      const d = noise.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 5);
+      master = ctx.createGain();
+      master.gain.value = 0.0001;
+      master.connect(ctx.destination);
+
+      const warm = ctx.createBiquadFilter();
+      warm.type = 'lowpass'; warm.frequency.value = 1800; warm.Q.value = 0.4;
+
+      // Quiet meditation room: ~3 s of decaying stereo noise as the impulse response.
+      const len = Math.floor(ctx.sampleRate * 3), ir = ctx.createBuffer(2, len, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.4);
+      }
+      const verb = ctx.createConvolver(); verb.buffer = ir;
+      const dry = ctx.createGain(); dry.gain.value = 0.75;
+      const wet = ctx.createGain(); wet.gain.value = 0.4;
+      const echo = ctx.createDelay(1); echo.delayTime.value = 0.27;
+      const feedback = ctx.createGain(); feedback.gain.value = 0.25;
+      const echoOut = ctx.createGain(); echoOut.gain.value = 0.1;
+
+      warm.connect(dry).connect(master);
+      warm.connect(verb).connect(wet).connect(master);
+      warm.connect(echo); echo.connect(feedback).connect(echo); echo.connect(echoOut).connect(master);
+      bus = warm;
+
+      const n = Math.floor(ctx.sampleRate * 4);
+      noiseBuf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const nd = noiseBuf.getChannelData(0);
+      for (let i = 0; i < n; i++) nd[i] = Math.random() * 2 - 1;
       return true;
     }
-    function play(freq, vol) {
-      if (!on || !ctx) return;
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource(); src.buffer = noise;
-      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = 3;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(vol, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
-      src.connect(bp).connect(g).connect(ctx.destination);
-      src.start(t);
+
+    function voice(freq, t, attack, peak, decay) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(peak, t + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+      o.connect(g).connect(bus);
+      o.start(t);
+      o.stop(t + attack + decay + 0.1);
     }
-    btn.addEventListener('click', () => {
-      if (!ctx && !init()) return;
-      on = !on;
-      if (on) ctx.resume();
+
+    function strike(f0 = ROOT, peak = 0.15, decay = 7, delay = 0) {
+      const t = ctx.currentTime + delay + 0.01;
+      const f = f0 * (1 + (Math.random() - 0.5) * 0.004);     // no two strikes quite alike
+      voice(f, t, 0.04, peak, decay);
+      voice(f + 1.8, t, 0.04, peak * 0.8, decay);             // 1.8 Hz "wah-wah" beating
+      voice(f * 2.71, t, 0.04, peak * 0.4, decay / 2);
+      voice(f * 4.83, t, 0.04, peak * 0.22, decay / 2);
+    }
+
+    function sing(f, peak = 0.04, attack = 0.3, release = 2.5, delay = 0) {
+      const t = ctx.currentTime + delay + 0.01;
+      voice(f, t, attack, peak, release);
+      voice(f + 1.8, t, attack, peak * 0.7, release);
+      voice(f * 2.71, t, attack, peak * 0.12, release * 0.6);
+      // Breath of the mallet on the rim: noise through a narrow band at the note.
+      const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+      src.buffer = noiseBuf;
+      bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = 22;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(peak * 1.4, t + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + attack + release);
+      src.connect(bp).connect(g).connect(bus);
+      src.start(t, Math.random() * 2);
+      src.stop(t + attack + release + 0.1);
+    }
+
+    function drop(delay = 0) {
+      const t = ctx.currentTime + delay + 0.01;
+      const f = PENTA[Math.floor(Math.random() * PENTA.length)] * 4;
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(f * 0.7, t);                 // a droplet "bloop" rises in pitch
+      o.frequency.exponentialRampToValueAtTime(f * 1.15, t + 0.09);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.03, t + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+      o.connect(g).connect(bus);
+      o.start(t);
+      o.stop(t + 0.4);
+    }
+
+    function wake() {
+      clearTimeout(offTimer);
+      ctx.resume();
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setTargetAtTime(0.9, ctx.currentTime, 0.03);
+    }
+
+    function setOn(v) {
+      if (v && !init()) return;
+      on = v;
       btn.setAttribute('aria-pressed', String(on));
       state.textContent = on ? 'On' : '—';
-      if (on) play(2600, 0.5);
-    });
+      if (!ctx) return;
+      if (on) { wake(); strike(ROOT, 0.15, 7); }
+      else {
+        master.gain.cancelScheduledValues(ctx.currentTime);
+        master.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.08);
+        clearTimeout(offTimer);
+        offTimer = setTimeout(() => { if (!on) ctx.suspend(); }, 500);
+      }
+    }
+    btn.addEventListener('click', () => setOn(!on));
+
+    const ambient = (fn) => { if (on && ctx) fn(); };
     return {
-      second() { play(1500, 0.18); },
-      step() { play(3400, 0.6); },
-      click() { play(2400, 0.35); },
+      ROOT, PENTA,
+      ripple(delay) { ambient(() => drop(delay)); },
+      step(i) { ambient(() => sing(PENTA[i % PENTA.length])); },
+      strike(f) { ambient(() => strike(f || ROOT, 0.12, 6)); },
+      spin(seconds) { ambient(() => sing(ROOT, 0.05, Math.max(0.5, seconds), 3.5)); },
+      minute() { ambient(() => { strike(ROOT, 0.2, 9); strike(ROOT / 2, 0.09, 10); }); },
+      click() { ambient(() => strike(432, 0.05, 3)); },
+      // The bowl in the middle answers a deliberate press even when ambient sound is off.
+      bowl() {
+        if (!init()) return;
+        wake();
+        strike(ROOT, 0.16, 8);
+        if (!on) offTimer = setTimeout(() => { if (!on) ctx.suspend(); }, 9000);
+      },
     };
   })();
 
@@ -61,85 +166,277 @@
     sound.click();
   });
 
-  /* ================= Kinetic clock ================= */
+  /* ================= Kinetic clock: strings of time =================
+     Each second of the current minute owns a point on a circular dial.
+     When the second arrives, a string shoots out from the clock to that
+     point and stays; its waves keep travelling outward from the middle.
+     Finale: from :56 the whole dial makes one full turn, ripples close in
+     on the clock, and at :00 a ripple of light runs through the digits as
+     the minute changes. Then the strings are pulled in and it starts over. */
   (() => {
-    const stage = $('#stage'), svg = $('#wires'), ticker = $('#ticker');
-    const hh = $('#hh'), mm = $('#mm'), colon = $('#colon'), clockEl = $('#clock');
+    const stage = $('#stage'), svg = $('#wires');
+    const hh = $('#hh'), mm = $('#mm'), colon = $('#colon'), clockEl = $('#clock'), glow = $('#clockGlow'), bowl = $('#bowl');
+    const NS = 'http://www.w3.org/2000/svg';
     const fmt = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Kathmandu', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
     });
-    const SLOTS = [-3, -2, -1, 0, 1];        // past seconds above, the next one waiting below
-    const GAP = 30, ROLL_MS = 700, ARC_R = 170;
-    const NS = 'http://www.w3.org/2000/svg';
-    const nums = SLOTS.map(() => ticker.appendChild(document.createElement('span')));
-    const paths = SLOTS.map(() => svg.appendChild(document.createElementNS(NS, 'path')));
-    let geo = null, rollStart = -1e9, raf = 0, lastSec = -1;
+    const mk = (tag, attrs, parent) => {
+      const e = document.createElementNS(NS, tag);
+      Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+      parent.appendChild(e);
+      return e;
+    };
+    const gRing = mk('g', { class: 'ring' }, svg);
+    const gStrings = mk('g', { class: 'strings' }, svg);
+    const gRipples = mk('g', { class: 'ripples' }, svg);
+    const converge = [0, 1, 2].map(() => mk('circle', { class: 'converge' }, gRipples));
+    const labels = Array.from({ length: 60 }, (_, s) => {
+      const t = mk('text', {}, gRing);
+      t.textContent = String(s).padStart(2, '0');
+      return t;
+    });
 
-    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+    const SAMPLES = 40, GROW_MS = 700, RETRACT_MS = 700;
+    const SPIN_FROM = 56000, CONVERGE_FROM = 58200;   // ms into the minute
+    const TAU = Math.PI * 2;
+    const angle = (s) => -Math.PI / 2 + s * (Math.PI / 30);
+    const rand = (a, b) => a + Math.random() * (b - a);
+    const ease = (t) => 1 - Math.pow(1 - t, 3);
+    const inOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const still = () => reduceMotion.matches;
+
+    let geo = null, strings = [], ripples = [], current = -1, minuteKey = null, raf = 0, onScreen = true;
+    let rot = 0, placedRot = null, glowAt = -1;
+    const GLOW_MS = 1700;
+    const smoothstep = (x) => x * x * (3 - 2 * x);
+
+    const live = (s) => strings.some((st) => st.s === s && st.retractAt === null);
 
     function measure() {
-      const s = stage.getBoundingClientRect();
-      const c = colon.getBoundingClientRect();
-      const k = clockEl.getBoundingClientRect();
-      const reach = Math.min(230, s.width * 0.24);
-      geo = {
-        w: s.width, h: s.height,
-        tx: Math.max(12, k.left - s.left - reach),
-        tX: c.left - s.left + c.width / 2,
-        tY: c.top - s.top + c.height * 0.55,
-      };
+      const s = stage.getBoundingClientRect(), k = clockEl.getBoundingClientRect();
+      const cx = k.left - s.left + k.width / 2, cy = k.top - s.top + k.height / 2;
+      const R = Math.max(70, Math.min(s.width, s.height) / 2 - 26);
+      const rIn = Math.min(R - 30, k.width / 2 + 16);          // the clear circle around the digits
+      geo = { cx, cy, R, rIn, sparse: (TAU * R) / 60 < 22 };
       svg.setAttribute('viewBox', `0 0 ${s.width} ${s.height}`);
+      Object.assign(bowl.style, { left: `${cx - rIn}px`, top: `${cy - rIn}px`, width: `${rIn * 2}px`, height: `${rIn * 2}px` });
+      placedRot = null;
+      placeLabels();
+      paintLabels();
     }
 
-    function draw(now) {
-      if (!geo) return;
-      const p = reduceMotion.matches ? 1 : clamp((now - rollStart) / ROLL_MS, 0, 1);
-      const roll = 1 - easeOut(p);            // 1 → 0 just after each tick
-      SLOTS.forEach((k, i) => {
-        const u = k + roll;                    // slot position; 0 = aligned with the clock
-        const y = u * GAP;
-        const x = geo.tx + ARC_R - Math.sqrt(Math.max(0, ARC_R * ARC_R - y * y));
-        const op = u >= 0 ? clamp(1 - u, 0, 1) : clamp(1 + u * 0.3, 0, 1);
-        const el = nums[i];
-        el.style.transform = `translate3d(${x.toFixed(2)}px, ${(geo.tY + y - 7).toFixed(2)}px, 0)`;
-        el.style.opacity = op.toFixed(3);
-
-        // Wire from the number into the colon, bending more the further away it starts.
-        const x0 = x + 18, y0 = geo.tY + y;
-        const x3 = geo.tX, y3 = geo.tY;
-        const dx = x3 - x0;
-        const d = `M${x0.toFixed(2)},${y0.toFixed(2)} C${(x0 + dx * 0.5).toFixed(2)},${(y0 - u * 4).toFixed(2)} ${(x3 - dx * 0.28).toFixed(2)},${(y3 + (y0 - y3) * 0.08).toFixed(2)} ${x3.toFixed(2)},${y3.toFixed(2)}`;
-        paths[i].setAttribute('d', d);
-        paths[i].style.opacity = op.toFixed(3);
+    function placeLabels() {
+      if (!geo || placedRot === rot) return;
+      placedRot = rot;
+      labels.forEach((t, sec) => {
+        const th = angle(sec) + rot;
+        t.setAttribute('x', (geo.cx + Math.cos(th) * (geo.R + 13)).toFixed(1));
+        t.setAttribute('y', (geo.cy + Math.sin(th) * (geo.R + 13)).toFixed(1));
       });
-      if (p < 1) raf = requestAnimationFrame(draw); else raf = 0;
     }
+
+    function paintLabels() {
+      if (!geo) return;
+      labels.forEach((t, s) => {
+        const isNow = s === current;
+        t.classList.toggle('on', isNow || (live(s) && (!geo.sparse || s % 5 === 0)));
+        t.classList.toggle('now', isNow);
+      });
+    }
+
+    function addString(s, now, delay) {
+      strings.push({
+        s, th: angle(s),
+        A: rand(1.2, 4.5),                                   // resting wave height (px)
+        f: rand(0.8, 3.4),                                   // waves along the string
+        w: rand(1.1, 3.2),                                   // outward travel speed
+        phi: rand(0, TAU),
+        born: now + delay, pluckAt: now + delay + GROW_MS * 0.75, pluckAmp: rand(7, 13),
+        retractAt: null,
+        path: mk('path', {}, gStrings),
+      });
+    }
+
+    function addRipple(x, y, t0, dur, r0, r1, big) {
+      ripples.push({ x, y, t0, dur, r0, r1, c: mk('circle', { class: big ? 'ripple big' : 'ripple' }, gRipples) });
+    }
+
+    function pluck(s, now) {
+      const th = angle(s) + rot;
+      const x = geo.cx + Math.cos(th) * geo.R, y = geo.cy + Math.sin(th) * geo.R;
+      addRipple(x, y, now, 1100, 0, 30, false);
+      addRipple(x, y, now + 160, 1100, 0, 18, false);
+      strings.forEach((st) => {
+        if (st.s === s || st.retractAt !== null) return;
+        let d = Math.abs(st.s - s); d = Math.min(d, 60 - d);
+        const strength = 8 * Math.exp(-d / 5);
+        if (strength < 0.4) return;
+        st.pluckAt = now + d * 45;                            // the ripple reaches farther strings later
+        st.pluckAmp = strength;
+      });
+    }
+
+    function highlight(h, m) {
+      glow.innerHTML = `<span>${h}</span><span class="colon">:</span><span>${m}</span>`;
+      glowAt = performance.now();
+    }
+
+    function startOver(now) {
+      strings
+        .filter((st) => st.retractAt === null)
+        .sort((a, b) => a.s - b.s)
+        .forEach((st, i) => { st.retractAt = now + i * 9; });
+      for (let k = 0; k < 3; k++) addRipple(geo.cx, geo.cy, now + k * 200, 1500, geo.rIn, geo.R + 30, true);
+      sound.minute();
+    }
+
+    function frame(now) {
+      raf = 0;
+      if (!geo) return;
+      const t = still() ? 0 : now / 1000;
+      const { cx, cy, R, rIn } = geo;
+      const msm = Date.now() % 60000;                         // ms into the minute (NPT is a whole-minute offset)
+
+      // One full turn of the dial, easing in and out, landing exactly on :00.
+      const sp = still() ? 0 : clamp((msm - SPIN_FROM) / (60000 - SPIN_FROM), 0, 1);
+      rot = TAU * inOut(sp);
+      const whip = sp > 0 && sp < 1 ? (sp < 0.5 ? 12 * sp * sp : 12 * (1 - sp) * (1 - sp)) / 3 : 0;  // 0..1, peaks mid-turn
+      placeLabels();
+
+      strings = strings.filter((st) => {
+        let u0 = 0;
+        if (st.retractAt !== null) {
+          const r = still() ? 1 : clamp((now - st.retractAt) / RETRACT_MS, 0, 1);
+          if (r >= 1) { st.path.remove(); return false; }
+          u0 = ease(r);                                       // outer end slides into the clock
+        }
+        if (!still()) u0 = Math.max(u0, 1 - ease(clamp((now - st.born) / GROW_MS, 0, 1)));
+        if (1 - u0 < 0.002) { st.path.setAttribute('d', ''); return true; }
+
+        const th = st.th + rot;
+        const c = Math.cos(th), sn = Math.sin(th);
+        const P = [cx + c * R, cy + sn * R];                  // on the dial
+        const Q = [cx + c * rIn, cy + sn * rIn];              // on the clear circle round the digits
+        const L = R - rIn;
+        const nx = -sn, ny = c;                               // tangent, used for the swirl and the wave
+        const swirl = 0.22 + whip * 0.25;                     // strings trail a little more while spinning
+        const M = [(P[0] + Q[0]) / 2 + nx * L * swirl, (P[1] + Q[1]) / 2 + ny * L * swirl];
+        const pl = !still() && now >= st.pluckAt ? st.pluckAmp * Math.exp(-(now - st.pluckAt) / 480) : 0;
+        const A = st.A + pl + whip * 3;
+
+        let d = '';
+        for (let i = 0; i <= SAMPLES; i++) {
+          const u = u0 + (1 - u0) * (i / SAMPLES);
+          const a = (1 - u) * (1 - u), b = 2 * u * (1 - u), q = u * u;
+          const off = A * Math.sin(2 * Math.PI * st.f * u + st.w * t + st.phi) * Math.sin(Math.PI * u);
+          const x = a * P[0] + b * M[0] + q * Q[0] + nx * off;
+          const y = a * P[1] + b * M[1] + q * Q[1] + ny * off;
+          d += `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+        }
+        st.path.setAttribute('d', d);
+        st.path.classList.toggle('now', st.s === current && st.retractAt === null);
+        return true;
+      });
+
+      // Rings close in from the dial and meet the digits at :00.
+      const cv = still() ? 0 : clamp((msm - CONVERGE_FROM) / (60000 - CONVERGE_FROM), 0, 1);
+      converge.forEach((el, i) => {
+        const p = clamp(cv - i * 0.12, 0, 1);
+        if (p <= 0) { el.style.opacity = '0'; return; }
+        el.setAttribute('cx', cx.toFixed(1));
+        el.setAttribute('cy', cy.toFixed(1));
+        el.setAttribute('r', (R + (rIn - R) * p * p * p).toFixed(1));
+        el.style.opacity = (Math.min(1, p * 4) * (0.7 - i * 0.2)).toFixed(3);
+      });
+
+      // Amethyst ripple through the digits: two rings widening from the centre of the time.
+      if (glowAt >= 0) {
+        const gp = (now - glowAt) / GLOW_MS;
+        if (gp >= 1 || still()) { glow.style.opacity = '0'; glowAt = -1; }
+        else {
+          // The ring band sits at 29–45% of the mask size, so ~560px carries it just past the digits.
+          const span = Math.max(260, (clockEl.offsetWidth / 2) / 0.28);
+          const a = smoothstep(gp) * span, b = smoothstep(clamp((gp - 0.18) / 0.82, 0, 1)) * span;
+          const size = `${a.toFixed(0)}px ${a.toFixed(0)}px, ${b.toFixed(0)}px ${b.toFixed(0)}px`;
+          glow.style.webkitMaskSize = size;
+          glow.style.maskSize = size;
+          glow.style.opacity = '1';
+        }
+      }
+
+      ripples = ripples.filter((rp) => {
+        const p = (now - rp.t0) / rp.dur;
+        if (p >= 1 || still()) { rp.c.remove(); return false; }
+        if (p < 0) { rp.c.style.opacity = '0'; return true; }
+        rp.c.setAttribute('cx', rp.x.toFixed(1));
+        rp.c.setAttribute('cy', rp.y.toFixed(1));
+        rp.c.setAttribute('r', (rp.r0 + ease(p) * (rp.r1 - rp.r0)).toFixed(1));
+        rp.c.style.opacity = ((1 - p) * (1 - p)).toFixed(3);
+        return true;
+      });
+
+      if (!still() && onScreen && !document.hidden) raf = requestAnimationFrame(frame);
+    }
+    const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
 
     function tick() {
-      const parts = {};
-      fmt.formatToParts(new Date()).forEach((x) => { parts[x.type] = x.value; });
-      const sec = +parts.second;
-      if (sec !== lastSec) {
-        SLOTS.forEach((k, i) => {
-          nums[i].textContent = String((sec + k + 60) % 60).padStart(2, '0');
-          nums[i].classList.toggle('now', k === 0);
-        });
-        hh.textContent = parts.hour;
-        mm.textContent = parts.minute;
-        clockEl.setAttribute('aria-label', `Local time in Kathmandu ${parts.hour}:${parts.minute}`);
+      const now = performance.now();
+      const p = {};
+      fmt.formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
+      const sec = +p.second, key = p.hour + p.minute;
+      if (sec !== current) {
+        const first = current === -1;
+        const rolled = !first && key !== minuteKey;
+        if (rolled) startOver(now);
+        // Every second of this minute so far gets a string; catches up after a sleeping tab too.
+        for (let s = 0; s <= sec; s++) {
+          if (live(s)) continue;
+          const delay = first ? s * 22 : rolled ? 380 + s * 12 : 0;
+          addString(s, now, still() ? 0 : delay);
+        }
+        current = sec; minuteKey = key;
+        if (!first && !still()) pluck(sec, now + (rolled ? 380 : 0) + GROW_MS * 0.75);
+        if (!first && !rolled) sound.ripple((GROW_MS * 0.75) / 1000);
+        if (!first && sec === 56) sound.spin((60000 - (Date.now() % 60000)) / 1000);
+        if (rolled && !still()) {
+          if (mm.textContent !== p.minute) { mm.classList.remove('roll'); void mm.offsetWidth; mm.classList.add('roll'); }
+          if (hh.textContent !== p.hour) { hh.classList.remove('roll'); void hh.offsetWidth; hh.classList.add('roll'); }
+          highlight(p.hour, p.minute);
+        }
+        hh.textContent = p.hour;
+        mm.textContent = p.minute;
+        clockEl.setAttribute('aria-label', `Local time in Kathmandu ${p.hour}:${p.minute}`);
         colon.classList.remove('dim');
         setTimeout(() => colon.classList.add('dim'), 500);
-        if (lastSec !== -1) sound.second();
-        lastSec = sec;
-        rollStart = performance.now();
-        if (!raf) raf = requestAnimationFrame(draw);
+        paintLabels();
+        kick();
       }
       setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
     }
 
-    const remeasure = () => { measure(); if (!raf) raf = requestAnimationFrame(draw); };
+    // Pressing the middle rings the bowl and releases a ripple from the centre.
+    bowl.addEventListener('click', () => {
+      sound.bowl();
+      if (!geo) return;
+      const now = performance.now();
+      for (let k = 0; k < 4; k++) addRipple(geo.cx, geo.cy, now + k * 260, 2200, 4, geo.R + 40, true);
+      highlight(hh.textContent, mm.textContent);
+      strings.forEach((st) => {
+        if (st.retractAt !== null) return;
+        st.pluckAt = now + 120 + ((geo.R - geo.rIn) / (geo.R + 40)) * 900 * Math.random();
+        st.pluckAmp = rand(5, 9);
+      });
+      kick();
+    });
+
+    const remeasure = () => { measure(); kick(); };
     window.addEventListener('resize', remeasure);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(remeasure);
+    document.addEventListener('visibilitychange', kick);
+    reduceMotion.addEventListener?.('change', kick);
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) kick(); }).observe(stage);
+    }
     measure();
     tick();
   })();
@@ -330,7 +627,7 @@
       yearEl.textContent = it.year;
       if (!first) {
         [idxEl, yearEl].forEach((e) => { e.classList.remove('flip'); void e.offsetWidth; e.classList.add('flip'); });
-        sound.step();
+        sound.step(i);
       }
       titleEls.forEach((e, j) => e.setAttribute('aria-selected', String(j === i)));
       cluster.setAttribute('aria-activedescendant', titleEls[i].id);
@@ -447,7 +744,7 @@
   const sheets = { work: $('#sheet-work'), about: $('#sheet-about'), playground: $('#sheet-playground') };
   const navLinks = $$('[data-nav]');
   const prevLink = $('#casePrev'), nextLink = $('#caseNext');
-  let openSheet = null, pauseTimer = 0;
+  let openSheet = null, pauseTimer = 0, lastRoute = '';
 
   function openCase(id) { location.hash = `#work/${id}`; }
 
@@ -488,7 +785,13 @@
     }
 
     navLinks.forEach((a) => a.classList.toggle('is-active', a.dataset.nav === view));
+    const before = location.hash;
     const wasOpen = showSheet(sheet);
+    if (sheet && (sheet !== wasOpen || before !== lastRoute)) {
+      const i = items.findIndex((it) => it.el.classList.contains('is-shown'));
+      sound.strike(sheet === 'work' ? sound.PENTA[Math.max(0, i) % 5] : sheet === 'about' ? 243 : 324);
+    }
+    lastRoute = before;
 
     if (sheet) {
       const el = sheets[sheet];
